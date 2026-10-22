@@ -2,6 +2,12 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.3.3]
+
+### Fixed
+
+- Scrolling down Settings to the Downloader card no longer leaves the screen jumping up and down, and each row scrolls just into view instead of past it.
+
 ## [v0.3.2]
 
 ### Added
