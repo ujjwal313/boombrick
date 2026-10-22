@@ -443,14 +443,16 @@ func (s *Screen) Draw(u *ui.Context) {
 
 	top := listTop(u)
 	view := gfx.Rect{X: 0, Y: top, W: theme.ScreenW, H: screens.ContentBot - top}
-	y := top - float32(s.scroll.At(u.Now))
-	var focusTop, focusBot float32
+	// y and focus are down the list from its top, whatever the scroll; at is
+	// where that top is drawn.
+	at := top - float32(s.scroll.At(u.Now))
+	var y, focusTop, focusBot float32
 	u.PushClip(view)
 	for i := range s.rows {
 		if !s.shown(i) {
 			continue
 		}
-		box := gfx.Rect{X: side - rowInset, Y: y, W: theme.ScreenW - 2*(side-rowInset), H: widgets.SettingHeight}
+		box := gfx.Rect{X: side - rowInset, Y: at + y, W: theme.ScreenW - 2*(side-rowInset), H: widgets.SettingHeight}
 		if s.open == i {
 			box.H = s.panelHeight(u, i)
 			s.drawPanel(u, i, box)
@@ -471,7 +473,7 @@ func (s *Screen) Draw(u *ui.Context) {
 			continue
 		}
 		y += 16
-		box := gfx.Rect{X: side, Y: y, W: theme.ScreenW - 2*side, H: c.card.height(u)}
+		box := gfx.Rect{X: side, Y: at + y, W: theme.ScreenW - 2*side, H: c.card.height(u)}
 		c.card.draw(u, box, float32(s.k[c.pill].At(u.Now)))
 		if c.pill == s.focus {
 			focusTop, focusBot = y, y+box.H
@@ -481,22 +483,22 @@ func (s *Screen) Draw(u *ui.Context) {
 	// The Spotify account, under a heading of its own.
 	if s.account.title != "" {
 		y += 28
-		u.Text("Accounts", text.Heading, side, y, theme.Paper)
+		u.Text("Accounts", text.Heading, side, at+y, theme.Paper)
 		y += u.LineHeight(text.Heading) + 4
-		box := gfx.Rect{X: side, Y: y, W: theme.ScreenW - 2*side, H: s.account.height(u)}
+		box := gfx.Rect{X: side, Y: at + y, W: theme.ScreenW - 2*side, H: s.account.height(u)}
 		s.account.draw(u, box, float32(s.k[pillAccount].At(u.Now)))
 		if s.focus == pillAccount {
-			focusTop, focusBot = box.Y, box.Y+box.H
+			focusTop, focusBot = y, y+box.H
 		}
 		y += box.H
 	}
 	y += 28
-	u.Text(s.footer, footText, side, y, theme.Ink3)
+	u.Text(s.footer, footText, side, at+y, theme.Ink3)
 	if s.last() {
 		focusBot = y + u.LineHeight(footText) // and the last item the footer
 	}
 	u.PopClip()
-	s.follow(focusTop, focusBot, view, u.Now)
+	s.follow(focusTop, focusBot, view.H, u.Now)
 	if s.dialog != nil {
 		if s.dialog.gone(u.Now) {
 			s.dialog = nil
@@ -535,19 +537,14 @@ func header(u *ui.Context, title string) {
 // listTop is where the rows start, under the header.
 func listTop(u *ui.Context) float32 { return headTop + u.LineHeight(text.Title) + 12 }
 
-// follow scrolls so that the focused row, from top to bot as drawn now, is
-// wholly in view.
-func (s *Screen) follow(top, bot float32, view gfx.Rect, now time.Time) {
-	shift := float32(0)
-	switch {
-	case bot > view.Y+view.H:
-		shift = bot - (view.Y + view.H)
-	case top < view.Y:
-		shift = top - view.Y
-	}
-	if shift != 0 {
-		s.scroll.To(s.scroll.Target()+float64(shift), now, anim.Focus, anim.EaseOutCubic)
-	}
+// follow scrolls the list, view tall, so that the focused item, from top to
+// bot down it, is wholly in view, moving as little as it can. An item taller
+// than the view keeps its top in view. The scroll is the same for the same
+// item every frame, so it comes to rest.
+func (s *Screen) follow(top, bot, view float32, now time.Time) {
+	to := max(s.scroll.Target(), float64(bot)-float64(view))
+	to = min(to, float64(top))
+	s.scroll.To(to, now, anim.Focus, anim.EaseOutCubic)
 }
 
 // refresh writes the rows' values again when what they show has changed.

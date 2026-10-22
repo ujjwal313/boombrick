@@ -10,6 +10,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/player"
 	"github.com/ujjwal313/boombrick/internal/release"
+	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/selfupdate"
 	keys "github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/space"
@@ -17,6 +18,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/uitest"
+	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
 func TestMain(m *testing.M) { uitest.Main(m) }
@@ -538,5 +540,56 @@ func TestSpotifySettings(t *testing.T) {
 	render(t, e, t0)
 	if e.s.account.pill != "" || e.s.focus == pillAccount {
 		t.Fatalf("signed out: pill %q, focus %d", e.s.account.pill, e.s.focus)
+	}
+}
+
+// The scroll comes to rest where focus needs it, drawn frame by frame as on
+// the Brick. Here the Downloader card's pill is the last item, and it and the
+// footer under it are taller than the list: its top stays in view, and the
+// scroll doesn't swing between the two ends.
+func TestScrollComesToRest(t *testing.T) {
+	e := &env{prefs: prefs{}, p: &fakePlayer{}, space: &fakeSpace{}}
+	e.s = New(Options{Prefs: e.prefs, Player: e.p, Space: e.space, Version: "0.4.0", Device: "TrimUI Brick",
+		Card:       func() (int64, int64, int64) { return 1165 * gib / 10, 629 * gib / 10, 10 * gib },
+		Toast:      func(string) {},
+		Downloader: &fakeDownloader{d: download.Downloader{Updating: true, Progress: 0.22}},
+		Releases:   &fakeReleases{r: release.Release{Tag: "v0.4.0"}},
+		Updater:    &fakeUpdater{},
+		Spotify:    &fakeAccount{st: spotify.Status{State: spotify.SignedOut}},
+		Copies:     true})
+	e.s.Opened()
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.Status = fixture.Status()
+	now := t0
+	draw := func() {
+		u.BeginFrame(now)
+		e.s.Draw(u)
+	}
+	// down draws a second of frames after Down, and reports where the scroll
+	// came to rest.
+	down := func() float64 {
+		t.Helper()
+		if !e.s.Handle(press(input.Down), now) {
+			t.Fatalf("Down from %d didn't move", e.s.focus)
+		}
+		for range 60 {
+			draw()
+			now = now.Add(time.Second / 60)
+		}
+		if e.s.Animating(now) {
+			t.Fatalf("on %d the scroll is still moving, at %.1f for %.1f", e.s.focus, e.s.scroll.At(now), e.s.scroll.Target())
+		}
+		return e.s.scroll.At(now)
+	}
+	draw()
+	for e.s.focus != rowLevelling {
+		down()
+	}
+	view := float64(screens.ContentBot - listTop(u))
+	if got, want := e.s.scroll.At(now), 6*widgets.SettingHeight-view; got != want {
+		t.Errorf("Volume levelling scrolled to %.1f, want %.1f to bring its bottom in", got, want)
+	}
+	if got, want := down(), float64(6*widgets.SettingHeight+16); e.s.focus != pillTool || got != want {
+		t.Errorf("on %d the scroll rests at %.1f, want %.1f for the Downloader card's top", e.s.focus, got, want)
 	}
 }
