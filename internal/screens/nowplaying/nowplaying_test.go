@@ -20,14 +20,16 @@ type fake struct {
 	st                             player.State
 	toggles, nexts, prevs, repeats int
 	shuffles                       []bool
+	seeks                          []time.Duration
 }
 
-func (f *fake) State() player.State { return f.st }
-func (f *fake) Toggle()             { f.toggles++ }
-func (f *fake) Next()               { f.nexts++ }
-func (f *fake) Prev()               { f.prevs++ }
-func (f *fake) SetShuffle(on bool)  { f.shuffles = append(f.shuffles, on) }
-func (f *fake) CycleRepeat()        { f.repeats++ }
+func (f *fake) State() player.State  { return f.st }
+func (f *fake) Toggle()              { f.toggles++ }
+func (f *fake) Next()                { f.nexts++ }
+func (f *fake) Prev()                { f.prevs++ }
+func (f *fake) Seek(d time.Duration) { f.seeks = append(f.seeks, d) }
+func (f *fake) SetShuffle(on bool)   { f.shuffles = append(f.shuffles, on) }
+func (f *fake) CycleRepeat()         { f.repeats++ }
 
 var t0 = time.Unix(1000, 0)
 
@@ -323,4 +325,24 @@ func TestGoldenWithLyricsPill(t *testing.T) {
 	n.SetLyrics(func() {})
 	n.Draw(u)
 	uitest.Golden(t, "nowplaying-lyrics", off.Image())
+}
+
+func TestSeekWithL2AndR2(t *testing.T) {
+	f := playing() // 93 s in
+	n := New(f)
+	if !n.Handle(press(input.R2), t0) || !n.Handle(press(input.L2), t0) {
+		t.Fatal("L2 and R2 weren't handled")
+	}
+	if len(f.seeks) != 2 || f.seeks[0] != 103*time.Second || f.seeks[1] != 83*time.Second {
+		t.Errorf("seeks = %v, want [1m43s 1m23s]", f.seeks)
+	}
+	f.st.Elapsed = 4 * time.Second
+	n.Handle(press(input.L2), t0)
+	if got := f.seeks[2]; got != 0 {
+		t.Errorf("L2 near the start sought to %v, want 0", got)
+	}
+	f.st.Queued = false
+	if n.Handle(press(input.R2), t0) || len(f.seeks) != 3 {
+		t.Error("R2 with nothing queued sought")
+	}
 }

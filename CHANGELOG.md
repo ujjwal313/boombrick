@@ -2,6 +2,12 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [Unreleased]
+
+### Added
+
+- On Now Playing, L2 and R2 move 10 s back and on within the track, as ◀ and ▶ do on the lyrics screen.
+
 ## [v0.4.0]
 
 ### Added

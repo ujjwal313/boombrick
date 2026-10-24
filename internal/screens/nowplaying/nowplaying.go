@@ -27,9 +27,13 @@ type Player interface {
 	Toggle()
 	Next()
 	Prev()
+	Seek(d time.Duration)
 	SetShuffle(on bool)
 	CycleRepeat()
 }
+
+// seekStep is how far L2 and R2 move within the track, as in the lyrics screen.
+const seekStep = 10 * time.Second
 
 // Controls, left to right.
 const (
@@ -203,8 +207,8 @@ func (n *NowPlaying) moveTo(f int, now time.Time) {
 	n.values[f].To(1, now, anim.Focus, anim.EaseOutCubic)
 }
 
-// Handle moves focus along the controls, activates them with A and changes
-// track with L1 and R1. B is handled by the app, which closes the screen.
+// Handle moves focus along the controls, activates them with A, changes track
+// with L1 and R1 and moves 10 s within it with L2 and R2. B is handled by the app, which closes the screen.
 func (n *NowPlaying) Handle(ev input.Event, now time.Time) bool {
 	if ev.Kind == input.Release {
 		return false
@@ -253,6 +257,17 @@ func (n *NowPlaying) Handle(ev input.Event, now time.Time) bool {
 		return true
 	case input.R1:
 		n.p.Next()
+		return true
+	case input.L2, input.R2:
+		st := n.p.State()
+		if !st.Queued {
+			return false
+		}
+		d := -seekStep
+		if ev.Button == input.R2 {
+			d = seekStep
+		}
+		n.p.Seek(max(st.Elapsed+d, 0))
 		return true
 	}
 	return false
@@ -454,6 +469,7 @@ func (n *NowPlaying) hints(s player.State) []widgets.Hint {
 	if n.lyrics != nil {
 		hints = append(hints, widgets.Hint{Key: "Y", Label: "Lyrics"})
 	}
-	n.hintBar, n.hintLabel = append(hints, widgets.Hint{Key: "L1/R1", Label: "Track"}), label
+	hints = append(hints, widgets.Hint{Key: "L1/R1", Label: "Track"}, widgets.Hint{Key: "L2/R2", Label: "Seek"})
+	n.hintBar, n.hintLabel = hints, label
 	return n.hintBar
 }
