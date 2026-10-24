@@ -3,6 +3,7 @@ package audio
 import (
 	"errors"
 	"io"
+	"runtime"
 	"sync"
 	"time"
 
@@ -11,6 +12,9 @@ import (
 
 // OutputRate is the rate the device runs at; every source is resampled to it.
 const OutputRate = 48000
+
+// closeTimeout is how long Close waits for the loop to release the device.
+const closeTimeout = 2 * time.Second
 
 const (
 	// chunk is how many source frames each read carries: about 21 ms at 48 kHz.
@@ -274,12 +278,25 @@ func (e *Engine) Status() Status {
 // Close stops the goroutine, closes any source and closes the output.
 func (e *Engine) Close() error {
 	e.set(func() { e.closed = true })
-	<-e.done
+	// The loop closes the output itself, on its own thread. If the device
+	// wedged inside a call, don't hold up quitting for it.
+	select {
+	case <-e.done:
+	case <-time.After(closeTimeout):
+		return errors.New("audio: output did not close")
+	}
 	return e.out.Close()
 }
 
 func (e *Engine) loop() {
 	defer close(e.done)
+	// Every call into the device stays on this one OS thread, the one that
+	// opens and closes it. Go moves a goroutine between threads from call to
+	// call, and bluealsa's plugin, which keeps an I/O thread of its own per
+	// stream, then wedges in a write or a close: the headphones show as
+	// connected and stay silent.
+	runtime.LockOSThread()
+	defer e.out.Close()
 	defer func() {
 		e.nmu.Lock()
 		e.stopped = true

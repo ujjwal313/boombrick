@@ -2,6 +2,12 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [Unreleased]
+
+### Fixed
+
+- **Bluetooth headphones** play again: the sound stayed silent and Quit hung. Boombrick now keeps its calls to the sound card on one thread, which the Bluetooth plugin needs, and Quit no longer waits for a stuck card.
+
 ## [v0.4.0]
 
 ### Added
