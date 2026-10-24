@@ -27,6 +27,10 @@ var TabNames = [...]string{"Home", "Library", "Spotify", "YouTube", "Downloads"}
 // status bar.
 const maxDeviceName = 220
 
+// boltW is what the charging bolt takes before the battery's percentage: the
+// icon and the gap after it.
+const boltW = 18 + 6
+
 // batteryText is the battery's level as the status bar last showed it, so
 // that a frame formats it only when it changes. Only the UI thread draws.
 var batteryText struct {
@@ -66,6 +70,9 @@ func StatusBar(u *ui.Context) {
 		pct = batteryText.text
 		pw = u.TextWidth(pct, text.ChromeTnum)
 		total += 22 + pw + 8 + 40
+		if s.Charging {
+			total += boltW
+		}
 	}
 	right := float32(theme.ScreenW) - 28 - total
 
@@ -93,6 +100,10 @@ func StatusBar(u *ui.Context) {
 		x += nameW + 22
 	}
 	if s.Battery >= 0 {
+		if s.Charging { // a bolt before the percentage: the Brick is on the charger
+			u.Icon("bolt", 18, 2, false, x, (h-18)/2, theme.Paper)
+			x += boltW
+		}
 		u.Text(pct, text.ChromeTnum, x, ty, theme.Paper)
 		Battery(u, x+pw+8, (h-18)/2, s.Battery)
 	}

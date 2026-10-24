@@ -28,6 +28,7 @@ type Status struct {
 	Online     bool
 	Bluetooth  string
 	Battery    int
+	Charging   bool // the battery is on the charger
 }
 
 // Covers supplies album art. Neither method blocks: each returns nil while

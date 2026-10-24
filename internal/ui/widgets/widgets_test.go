@@ -558,3 +558,31 @@ func TestVolumePill(t *testing.T) {
 	VolumePill(u, 14, 1)
 	uitest.Golden(t, "volume-pill", off.Image())
 }
+
+// On the charger a bolt shows before the percentage, and the percentage and
+// the glyph stay where they were: the other items, which are laid out from
+// the right, make room by moving left.
+func TestStatusBarCharging(t *testing.T) {
+	bar := func(charging bool) *image.NRGBA {
+		u, off := uitest.NewContext(t, theme.DeviceW, int(StatusHeight*theme.Scale))
+		u.Status = ui.Status{Time: "21:07", Online: true, Battery: 77, Charging: charging}
+		StatusBar(u)
+		return off.Image()
+	}
+	px := func(x float64) int { return int(x * theme.Scale) } // a pixel column, as a variable rounds
+	off, on := bar(false), bar(true)
+	// "77%" and the glyph take about 90 px from the right-hand padding.
+	tail := image.Rect(px(theme.ScreenW-28-85), 0, px(theme.ScreenW-28), off.Bounds().Dy())
+	for y := tail.Min.Y; y < tail.Max.Y; y++ {
+		for x := tail.Min.X; x < tail.Max.X; x++ {
+			if off.NRGBAAt(x, y) != on.NRGBAAt(x, y) {
+				t.Fatalf("the percentage or the glyph moved: the bars differ at (%d, %d)", x, y)
+			}
+		}
+	}
+	// The bolt is in the 24 px before them.
+	bolt := image.Rect(px(theme.ScreenW-28-130), 0, px(theme.ScreenW-28-100), off.Bounds().Dy())
+	if brightest(on, bolt) < 200 {
+		t.Fatal("the bolt should be drawn before the percentage")
+	}
+}

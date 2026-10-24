@@ -584,7 +584,8 @@ func (a *App) poll() {
 			a.status = true
 			a.opts.Log.Info("status", "battery", s.Battery, "online", s.Online)
 		}
-		a.ui.Status.Battery, a.ui.Status.Online, a.ui.Status.Bluetooth = s.Battery, s.Online, s.Bluetooth
+		a.ui.Status.Battery, a.ui.Status.Charging = s.Battery, s.Charging
+		a.ui.Status.Online, a.ui.Status.Bluetooth = s.Online, s.Bluetooth
 		a.dirty = true
 	default:
 	}
