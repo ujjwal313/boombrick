@@ -28,6 +28,8 @@ It includes or links the following third-party components:
                                Code from FAAD2 is copyright (c) Nero AG, www.nero.com
   speexdsp resampler           BSD-3-Clause          https://speex.org (SpeexDSP-1.2.1)
   dhowden/tag (modified)       BSD-2-Clause          https://github.com/dhowden/tag
+  FFmpeg (minimal build)       LGPL-2.1-or-later     https://ffmpeg.org (7.1.1; see third_party/ffmpeg)
+                               Opens the audiobooks downloaded from Audible
   godbus/dbus                  BSD-2-Clause          https://github.com/godbus/dbus (v5.2.0)
   rsc.io/qr                    BSD-3-Clause          https://github.com/rsc/qr (v0.2.0)
   ALSA library (libasound)     LGPL-2.1              https://www.alsa-project.org

@@ -45,6 +45,7 @@ var formats = map[string]format{
 	".flac": {openFLAC, flacDuration},
 	".opus": {openOpus, opusDuration},
 	".m4a":  {openM4A, m4aDuration},
+	".m4b":  {openM4A, m4aDuration},
 }
 
 func formatOf(path string) (format, bool) {

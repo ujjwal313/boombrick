@@ -420,7 +420,11 @@ func (e *Engine) loop() {
 			e.mu.Unlock()
 			continue
 		}
-		e.st.Frame += int64(n)
+		if ps, ok := cur.(interface{ Pos() int64 }); ok {
+			e.st.Frame = ps.Pos() // a Tempo plays more or fewer frames than it uses up
+		} else {
+			e.st.Frame += int64(n)
+		}
 		if fo.total > 0 && e.fadeOut == fo {
 			if left := fo.left - k; left > 0 {
 				e.fadeOut.left = left

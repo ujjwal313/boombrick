@@ -431,7 +431,7 @@ func (h *Home) Draw(u *ui.Context) {
 	u.PopClip()
 
 	widgets.StatusBar(u)
-	widgets.Tabs(u, 0)
+	widgets.Tabs(u, screens.HomeTab)
 	widgets.HintBar(u, h.hints())
 }
 
@@ -449,7 +449,7 @@ func (h *Home) drawEmpty(u *ui.Context) {
 		widgets.DrawBackground(u, widgets.TabGround)
 	}
 	widgets.StatusBar(u)
-	widgets.Tabs(u, 0)
+	widgets.Tabs(u, screens.HomeTab)
 	widgets.HintBar(u, h.hints())
 }
 

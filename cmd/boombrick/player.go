@@ -6,6 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strconv"
+	"sync"
+	"time"
 
 	"github.com/ujjwal313/boombrick/internal/audio"
 	"github.com/ujjwal313/boombrick/internal/audio/alsa"
@@ -25,6 +28,10 @@ func newPlayer(db *sql.DB, prefs *settings.Settings, sp *spotify.Helper, online 
 	notify func(player.Notice)) *player.Player {
 	p := player.New(alsa.New(), decode.Open, log)
 	p.SetLevelling(prefs.Bool(settings.VolumeLevelling))
+	p.SetChapters(bookChapters())
+	if v, err := strconv.ParseFloat(prefs.String(settings.BookSpeed), 64); err == nil {
+		p.SetBookSpeed(v)
+	}
 	p.SetStreaming(func(ctx context.Context, t player.Track, frame int64, level bool) (audio.Source, error) {
 		// A song an import downloaded plays from its file: no key, no Wi-Fi.
 		if prefs.Bool(settings.PreferDownloaded) {
@@ -51,4 +58,25 @@ func online() bool { return platform.Online("/sys") }
 // bin folder, with its sessions kept in the data folder.
 func newHelper(dir string, paths platform.Paths, log *slog.Logger, out io.Writer) *spotify.Helper {
 	return spotify.NewHelper(filepath.Join(dir, "bin", "boombrick-spotify"), filepath.Join(paths.Data, "spotify"), log, out)
+}
+
+// bookChapters gives the player the chapters of audiobooks, each book's read
+// from its file once, the first time it is skipped through.
+func bookChapters() func(path string) []time.Duration {
+	var mu sync.Mutex
+	known := map[string][]time.Duration{}
+	return func(path string) []time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		if starts, ok := known[path]; ok {
+			return starts
+		}
+		chs, _ := decode.Chapters(path) // a book with unreadable chapters has none
+		starts := make([]time.Duration, len(chs))
+		for i, c := range chs {
+			starts[i] = c.Start
+		}
+		known[path] = starts
+		return starts
+	}
 }

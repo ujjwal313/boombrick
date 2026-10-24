@@ -21,7 +21,7 @@ const (
 )
 
 // TabNames are the top-level tabs in order.
-var TabNames = [...]string{"Home", "Library", "Spotify", "YouTube", "Downloads"}
+var TabNames = [...]string{"Home", "Library", "Books", "Spotify", "YouTube", "Downloads"}
 
 // maxDeviceName is the most room the Bluetooth device's name takes in the
 // status bar.
@@ -108,27 +108,59 @@ func Battery(u *ui.Context, x, y float32, percent int) {
 	u.Fill(gfx.Rect{X: x + 37, Y: y + 6, W: 3, H: 6}, theme.Paper)
 }
 
+const (
+	tabsSide = 32 // from the screen's edge to the L1 and R1 glyphs
+	tabsGap  = 26 // from each glyph to the names
+	tabsStep = 30 // from one name to the next
+)
+
+// tabsScroll is how far the tab names are shifted left to show tab active:
+// none while they all fit between the glyphs, else the least that puts the
+// active one in the middle, without leaving a gap at either end. total is the
+// names' width, view the room for them.
+func tabsScroll(total, view, activeX, activeW float32) float32 {
+	if total <= view {
+		return 0
+	}
+	return min(max(activeX+activeW/2-view/2, 0), total-view)
+}
+
 // Tabs draws the tab row under the status bar with tab active underlined in
-// the accent.
+// the accent. L1 and R1 stay at the two ends; when the names don't all fit
+// between them they scroll to keep the active one in view.
 func Tabs(u *ui.Context, active int) {
 	const y = StatusHeight
-	x := float32(32)
 	pillY := y + (TabsHeight-TabPill.Height)/2
-	x += KeyGlyph(u, "L1", x, pillY, TabPill, theme.PaperA(0.45)) + 26
+	left := tabsSide + KeyGlyph(u, "L1", tabsSide, pillY, TabPill, theme.PaperA(0.45)) + tabsGap
+	rw := glyphWidth(u, "R1", TabPill)
+	right := theme.ScreenW - tabsSide - rw
+	KeyGlyph(u, "R1", right, pillY, TabPill, theme.PaperA(0.45))
+	view := right - tabsGap - left
+
+	var xs, ws [len(TabNames)]float32
+	var total float32
+	for i, name := range TabNames {
+		xs[i], ws[i] = total, u.TextWidth(name, text.Tab)
+		total += ws[i] + tabsStep
+	}
+	total -= tabsStep
+	shift := tabsScroll(total, view, xs[active], ws[active])
+
 	lh := u.LineHeight(text.Tab)
 	ty := y + (TabsHeight-lh)/2 - 4
+	u.PushClip(gfx.Rect{X: left, Y: y, W: view, H: TabsHeight})
 	for i, name := range TabNames {
 		col := theme.Ink3
 		if i == active {
 			col = theme.Paper
 		}
-		w := u.Text(name, text.Tab, x, ty, col)
+		x := left + xs[i] - shift
+		u.Text(name, text.Tab, x, ty, col)
 		if i == active {
-			u.Fill(gfx.Rect{X: x, Y: ty + lh + 4, W: w, H: 3}, u.Accent.Color)
+			u.Fill(gfx.Rect{X: x, Y: ty + lh + 4, W: ws[i], H: 3}, u.Accent.Color)
 		}
-		x += w + 30
 	}
-	KeyGlyph(u, "R1", x-30+26, pillY, TabPill, theme.PaperA(0.45))
+	u.PopClip()
 }
 
 // GlyphStyle sizes a button glyph.

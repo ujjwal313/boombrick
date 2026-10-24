@@ -18,14 +18,28 @@ type Nav interface {
 	Toast(msg string)
 }
 
+// Closer is a screen that has something to stop when its page closes, as the
+// Audible sign-in has the web page it serves.
+type Closer interface {
+	Close()
+}
+
 // Backer is a screen that sometimes uses B itself, as the Queue does to
 // cancel a move. Back reports whether it did; if not, B goes back as usual.
 type Backer interface {
 	Back() bool
 }
 
-// DownloadsTab is the Downloads tab's place in the tab row.
-const DownloadsTab = 4
+// The tabs' places in the tab row, in the order of widgets.TabNames. Each tab
+// draws the row with its own place active, so they are kept here, in one place.
+const (
+	HomeTab = iota
+	LibraryTab
+	BooksTab
+	SpotifyTab
+	YouTubeTab
+	DownloadsTab
+)
 
 // Tabber is a Nav that can show another tab, as the app's does.
 type Tabber interface {

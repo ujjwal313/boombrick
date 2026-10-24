@@ -1404,3 +1404,113 @@ func TestUpcoming(t *testing.T) {
 	q, pos := p.Queue(nil)
 	next("shuffled", q[pos+1].Path)
 }
+
+func TestChapterTarget(t *testing.T) {
+	starts := []time.Duration{0, 10 * time.Minute, 20 * time.Minute}
+	for _, c := range []struct {
+		name string
+		at   time.Duration
+		dir  int
+		to   time.Duration
+		ok   bool
+	}{
+		{"next from the first", time.Minute, 1, 10 * time.Minute, true},
+		{"next from the middle", 15 * time.Minute, 1, 20 * time.Minute, true},
+		{"next from the last", 25 * time.Minute, 1, 0, false},
+		{"prev well into a chapter", 15 * time.Minute, -1, 10 * time.Minute, true},
+		{"prev just into a chapter", 10*time.Minute + time.Second, -1, 0, true},
+		{"prev well into the first", time.Minute, -1, 0, true},
+		{"prev at the very start", time.Second, -1, 0, false},
+	} {
+		if to, ok := chapterTarget(starts, c.at, c.dir); to != c.to || ok != c.ok {
+			t.Errorf("%s: got %v, %v; want %v, %v", c.name, to, ok, c.to, c.ok)
+		}
+	}
+	if _, ok := chapterTarget(nil, time.Hour, 1); ok {
+		t.Error("a book with no chapters has a next chapter")
+	}
+}
+
+// target is where the current track was last started or sought to.
+func target(p *Player) time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return duration(p.startFrame, p.curRate)
+}
+
+func TestBookMovesByChapter(t *testing.T) {
+	// The test output plays far faster than real time, so what is checked is
+	// where the player was sent, and chapters are hours apart.
+	const hour = 48000 * 3600
+	p, _ := newPlayer(t, map[string]int64{"book.m4b": 12 * hour, "other.m4b": 12 * hour})
+	p.SetChapters(func(path string) []time.Duration {
+		if path == "book.m4b" {
+			return []time.Duration{0, 3 * time.Hour, 6 * time.Hour}
+		}
+		return nil
+	})
+	p.Play(queue("book.m4b", "other.m4b"), 0)
+	settled(t, p)
+	p.Next()
+	if got := target(p); got != 3*time.Hour {
+		t.Fatalf("Next went to %v, want the second chapter", got)
+	}
+	if s := p.State(); s.Track.Path != "book.m4b" {
+		t.Fatalf("Next left the book for %q", s.Track.Path)
+	}
+	p.Seek(8 * time.Hour)
+	eventually(t, "the seek", func() bool { return p.State().Elapsed >= 8*time.Hour })
+	p.Next() // no chapter after the last: the next track
+	if s := p.State(); s.Track.Path != "other.m4b" {
+		t.Fatalf("Next at the last chapter gave %q", s.Track.Path)
+	}
+}
+
+func TestSeekByMovesFromWhereItIs(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"a": 48000 * 36000})
+	p.Play(queue("a"), 0)
+	settled(t, p)
+	p.Seek(5 * time.Hour)
+	p.SeekBy(-15 * time.Minute)
+	if got := target(p); got < 4*time.Hour+40*time.Minute || got > 4*time.Hour+50*time.Minute {
+		t.Fatalf("15 min back from 5 h went to %v", got)
+	}
+	p.SeekBy(-100 * time.Hour)
+	if got := target(p); got != 0 {
+		t.Fatalf("seeking before the start went to %v", got)
+	}
+}
+
+func TestABookKeepsItsPlaceLikeAnAlbum(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"book.m4b": long, "song.flac": long})
+	p.Play(queue("book.m4b"), 0)
+	if s, ok := p.Snapshot(); !ok || !s.AlbumRun {
+		t.Fatalf("a book on its own isn't kept: %+v", s)
+	}
+	p.Play(queue("song.flac"), 0)
+	if s, _ := p.Snapshot(); s.AlbumRun {
+		t.Fatal("a song on its own is kept as an album")
+	}
+}
+
+func TestStateSaysWhichChapter(t *testing.T) {
+	const hour = 48000 * 3600
+	p, _ := newPlayer(t, map[string]int64{"book.m4b": 12 * hour, "song.flac": 12 * hour})
+	p.SetChapters(func(path string) []time.Duration {
+		if path == "book.m4b" {
+			return []time.Duration{0, 3 * time.Hour, 6 * time.Hour}
+		}
+		return nil
+	})
+	p.Play(queue("book.m4b"), 0)
+	settled(t, p)
+	if s := p.State(); s.Chapters != 3 || s.Chapter != 1 {
+		t.Fatalf("at the start: chapter %d of %d", s.Chapter, s.Chapters)
+	}
+	p.Seek(7 * time.Hour)
+	eventually(t, "the last chapter", func() bool { s := p.State(); return s.Chapter == 3 })
+	p.Play(queue("song.flac"), 0)
+	if s := p.State(); s.Chapters != 0 || s.Chapter != 0 {
+		t.Fatalf("a song is in chapter %d of %d", s.Chapter, s.Chapters)
+	}
+}

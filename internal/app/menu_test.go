@@ -196,9 +196,10 @@ func TestPowerTurnsTheScreenOffAndOn(t *testing.T) {
 // remote records what the buttons heard with the screen off ask of the music.
 type remote struct{ got []string }
 
-func (r *remote) Prev()   { r.got = append(r.got, "prev") }
-func (r *remote) Next()   { r.got = append(r.got, "next") }
-func (r *remote) Toggle() { r.got = append(r.got, "toggle") }
+func (r *remote) Prev()                  { r.got = append(r.got, "prev") }
+func (r *remote) SeekBy(d time.Duration) { r.got = append(r.got, "seek "+d.String()) }
+func (r *remote) Next()                  { r.got = append(r.got, "next") }
+func (r *remote) Toggle()                { r.got = append(r.got, "toggle") }
 
 // With the screen off, L1 and R1 skip back and on and A plays or pauses; held,
 // they don't repeat, and the rest are ignored.
@@ -503,3 +504,6 @@ func TestVolumeChangedWithTheScreenOffShowsNothing(t *testing.T) {
 		t.Fatal("the pill showed with the screen off, or the news was kept")
 	}
 }
+
+func (r *remote) BookSpeed() float64   { return 1 }
+func (r *remote) SetBookSpeed(float64) {}

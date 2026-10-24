@@ -21,10 +21,11 @@ const (
 	artistsFilter
 	songsFilter
 	genresFilter
+	booksFilter
 	filterCount
 )
 
-var filterNames = [filterCount]string{"Albums", "Artists", "Songs", "Genres"}
+var filterNames = [filterCount]string{"Albums", "Artists", "Songs", "Genres", "Books"}
 
 const listTop = contentTop + widgets.FiltersHeight
 
@@ -37,11 +38,11 @@ type Library struct {
 	p         Player
 	musicDir  string
 	rescan    func()
+	shelf     *Shelf // plays books; nil plays them from the start
 	ix        *library.Index
 	filter    int
 	views     [filterCount]views.Grid
 	counts    [filterCount]string    // the filters' counts
-	oneCount  [filterCount]string    // the chosen filter's count alone, when all don't fit
 	rows      [filterCount][]listRow // the artists', songs' and genres' rows, made as they first show
 	laidOut   bool
 	measured  bool            // allCounts is known for this index
@@ -62,6 +63,7 @@ type listRow struct {
 func New(nav screens.Nav, p Player, musicDir string, rescan func()) *Library {
 	l := &Library{nav: nav, p: p, musicDir: musicDir, rescan: rescan}
 	l.views[albumsFilter] = screens.AlbumGrid()
+	l.views[booksFilter] = screens.AlbumGrid()
 	for _, f := range []int{artistsFilter, songsFilter, genresFilter} {
 		l.views[f] = views.Grid{Cols: 1, CellW: theme.ScreenW - 2*side, CellH: widgets.RowHeight, Pad: pad,
 			ViewH: contentBot - listTop}
@@ -76,12 +78,12 @@ func (l *Library) SetIndex(ix *library.Index) {
 	old := l.ix
 	l.ix = ix
 	l.counts = [filterCount]string{screens.Count(len(ix.Albums)), screens.Count(len(ix.Artists)),
-		screens.Count(len(ix.Songs)), screens.Count(len(ix.Genres))}
+		screens.Count(len(ix.Songs)), screens.Count(len(ix.Genres)), screens.Count(len(ix.Books))}
 	l.measured = false
 	l.rows[artistsFilter] = make([]listRow, len(ix.Artists))
 	l.rows[songsFilter] = make([]listRow, len(ix.Songs))
 	l.rows[genresFilter] = make([]listRow, len(ix.Genres))
-	if l.filter >= l.shown() {
+	if !l.visible(l.filter) {
 		l.filter = songsFilter
 	}
 	if old == nil {
@@ -89,6 +91,7 @@ func (l *Library) SetIndex(ix *library.Index) {
 		l.views[artistsFilter].SetCount(len(ix.Artists))
 		l.views[songsFilter].SetCount(len(ix.Songs))
 		l.views[genresFilter].SetCount(len(ix.Genres))
+		l.views[booksFilter].SetCount(len(ix.Books))
 		return
 	}
 	g := &l.views[albumsFilter]
@@ -103,14 +106,26 @@ func (l *Library) SetIndex(ix *library.Index) {
 	g = &l.views[genresFilter]
 	g.SetCountFocus(len(ix.Genres), refocus(old.Genres, ix.Genres, g.Focus(),
 		func(g *library.Genre) string { return strings.ToLower(g.Name) }))
+	g = &l.views[booksFilter]
+	g.SetCountFocus(len(ix.Books), refocus(old.Books, ix.Books, g.Focus(),
+		func(a *library.Album) [2]string { return [2]string{a.Artist, a.Title} }))
 }
 
-// shown is how many filters show: the genres only when there are some.
-func (l *Library) shown() int {
-	if len(l.ix.Genres) == 0 {
-		return genresFilter
+// visible reports whether filter f shows: the genres only when there are
+// some.
+func (l *Library) visible(f int) bool {
+	return f != genresFilter || len(l.ix.Genres) > 0
+}
+
+// step is the filter after f in direction d (-1 or 1) among those that show,
+// or -1 at either end.
+func (l *Library) step(f, d int) int {
+	for f += d; f >= 0 && f < filterCount; f += d {
+		if l.visible(f) {
+			return f
+		}
 	}
-	return filterCount
+	return -1
 }
 
 // refocus finds the item that was at f in old within now, by key; without it
@@ -126,11 +141,14 @@ func refocus[T any, K comparable](old, now []T, f int, key func(T) K) int {
 	return f
 }
 
+// SetShelf has books played from where they were left, through s.
+func (l *Library) SetShelf(s *Shelf) { l.shelf = s }
+
 // SetReading says the first scan is running and nothing is indexed yet;
 // until SetIndex the tab says the music is being read.
 func (l *Library) SetReading() { l.reading = true }
 
-func (l *Library) empty() bool { return l.ix != nil && len(l.ix.Albums) == 0 }
+func (l *Library) empty() bool { return l.ix != nil && len(l.ix.Albums) == 0 && len(l.ix.Books) == 0 }
 
 // Handle switches filters with L2/R2, moves with the D-pad, opens or plays
 // with A and queues with Y. X shuffles an artist or a genre. The empty
@@ -151,11 +169,12 @@ func (l *Library) Handle(ev input.Event, now time.Time) bool {
 	if ev.Kind == input.Press {
 		switch ev.Button {
 		case input.L2, input.R2:
-			f := l.filter - 1
+			d := -1
 			if ev.Button == input.R2 {
-				f = l.filter + 1
+				d = 1
 			}
-			if f < 0 || f >= l.shown() {
+			f := l.step(l.filter, d)
+			if f < 0 {
 				return false
 			}
 			l.filter = f
@@ -188,6 +207,13 @@ func (l *Library) open(i int) {
 		l.nav.Push(NewAlbumPage(l.nav, l.p, l.ix.Albums[i]))
 	case artistsFilter:
 		l.nav.Push(NewArtistPage(l.nav, l.p, l.ix.Artists[i]))
+	case booksFilter:
+		if l.shelf != nil {
+			l.shelf.Play(l.ix.Books[i])
+			break
+		}
+		l.p.SetShuffle(false)
+		l.p.Play(screens.Tracks(l.ix.Books[i].Tracks), 0)
 	case songsFilter:
 		l.p.SetShuffle(false)
 		l.p.Play(songTracks(l.ix.Songs), i)
@@ -205,6 +231,9 @@ func (l *Library) tracksAt(i int) []player.Track {
 		return artistTracks(l.ix.Artists[i])
 	case genresFilter:
 		return songTracks(l.ix.Genres[i].Songs)
+	}
+	if l.filter == booksFilter {
+		return screens.Tracks(l.ix.Books[i].Tracks)
 	}
 	return []player.Track{screens.TrackOf(l.ix.Songs[i])}
 }
@@ -232,25 +261,37 @@ func (l *Library) Draw(u *ui.Context) {
 		}
 	}
 	widgets.StatusBar(u)
-	widgets.Tabs(u, 1)
+	widgets.Tabs(u, screens.LibraryTab)
 	widgets.HintBar(u, l.hints())
 }
 
 // drawFilters draws L2, the filters with their counts, and R2. When the
 // counts don't all fit, only the chosen filter shows its count.
 func (l *Library) drawFilters(u *ui.Context) {
-	n := l.shown()
+	var names, counts, one [filterCount]string
+	n, active := 0, 0
+	for f := range filterCount {
+		if !l.visible(f) {
+			continue
+		}
+		if f == l.filter {
+			active = n
+		}
+		names[n], counts[n] = filterNames[f], l.counts[f]
+		if f == l.filter {
+			one[n] = l.counts[f]
+		}
+		n++
+	}
 	if !l.measured {
 		l.measured = true
-		l.allCounts = widgets.FiltersWidth(u, filterNames[:n], l.counts[:n]) <= theme.ScreenW-2*side
+		l.allCounts = widgets.FiltersWidth(u, names[:n], counts[:n]) <= theme.ScreenW-2*side
 	}
-	counts := l.counts[:n]
+	shown := counts[:n]
 	if !l.allCounts {
-		l.oneCount = [filterCount]string{}
-		l.oneCount[l.filter] = l.counts[l.filter]
-		counts = l.oneCount[:n]
+		shown = one[:n]
 	}
-	widgets.Filters(u, filterNames[:n], counts, l.filter, side, contentTop)
+	widgets.Filters(u, names[:n], shown, active, side, contentTop)
 }
 
 // row is item i's row in the artists, songs or genres, made the first time
@@ -282,6 +323,10 @@ func (l *Library) drawView(u *ui.Context) {
 	g := &l.views[l.filter]
 	if l.filter == albumsFilter {
 		drawAlbums(u, g, l.ix.Albums, listTop, func(i int) string { return l.ix.Albums[i].Artist })
+		return
+	}
+	if l.filter == booksFilter {
+		drawAlbums(u, g, l.ix.Books, listTop, func(i int) string { return l.ix.Books[i].Artist })
 		return
 	}
 	playing := l.p.State().Track.Path
@@ -326,7 +371,7 @@ func (l *Library) hints() []widgets.Hint {
 		return tabHints
 	case l.empty():
 		return rescanHints
-	case l.filter == songsFilter:
+	case l.filter == songsFilter, l.filter == booksFilter:
 		return songHints
 	case l.filter == artistsFilter, l.filter == genresFilter:
 		return shuffleHints

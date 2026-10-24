@@ -6,11 +6,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/audio"
@@ -33,6 +35,10 @@ type Track struct {
 	SpotifyID string
 	Cover     string
 }
+
+// IsBook reports whether t is an audiobook: Next and Prev move by chapter in
+// it, and its place is kept as an album's is, though it is one file.
+func (t Track) IsBook() bool { return strings.EqualFold(filepath.Ext(t.Path), ".m4b") }
 
 // Pending reports whether t is a song still downloading.
 func (t Track) Pending() bool { return t.Path == "" && t.VideoID != "" }
@@ -71,6 +77,9 @@ type State struct {
 	Elapsed, Duration time.Duration
 	Rate              int    // the current file's sample rate, 0 if unknown
 	Format            string // from the file extension: "MP3", "FLAC"
+	// Chapter and Chapters are, in a book with chapters, the one playing
+	// (from 1) and how many there are; both 0 otherwise.
+	Chapter, Chapters int
 	Shuffle           bool
 	Repeat            Repeat
 	Err               error  // the last output error, which paused playback
@@ -143,14 +152,18 @@ type Player struct {
 	failures    int  // streams in a row that wouldn't open
 	cancelOpen  context.CancelFunc
 	cancelPrime context.CancelFunc
-	retryTimer  stopper // tries a refused stream again
-	primeTimer  stopper // opens the stream to follow once cur nears its end
+	retryTimer  stopper       // tries a refused stream again
+	primeTimer  stopper       // opens the stream to follow once cur nears its end
+	speed       atomic.Uint64 // the books' speed, as a float64's bits
+	// chapters says where the chapters of a book start; nil if it can't.
+	chapters func(path string) []time.Duration
 }
 
 // New creates a player that plays through out and opens files with open.
 func New(out audio.Output, open Opener, log *slog.Logger) *Player {
 	p := &Player{open: open, log: log, rng: rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0)),
 		after: afterFunc, now: time.Now}
+	p.SetBookSpeed(1)
 	p.engine = audio.NewEngine(out, p.ended)
 	return p
 }
@@ -222,8 +235,23 @@ func (p *Player) openTrack(t Track, levelling, album bool) (audio.Source, error)
 	if db, peak, ok := levelGain(t, album); levelling && ok {
 		src = audio.WithGain(src, db, peak)
 	}
+	if t.IsBook() {
+		src = audio.NewTempo(src, p.bookSpeed)
+	}
 	return src, nil
 }
+
+// bookSpeed is the speed books play at, read as they play.
+func (p *Player) bookSpeed() float64 { return math.Float64frombits(p.speed.Load()) }
+
+// SetBookSpeed sets how fast books play, 1 being their own pace, at once and
+// without changing their pitch. It is kept between books, not between runs.
+func (p *Player) SetBookSpeed(s float64) {
+	p.speed.Store(math.Float64bits(min(max(s, audio.MinTempo), audio.MaxTempo)))
+}
+
+// BookSpeed is how fast books play.
+func (p *Player) BookSpeed() float64 { return p.bookSpeed() }
 
 // Play replaces the queue with tracks and starts at tracks[start].
 func (p *Player) Play(tracks []Track, start int) { p.PlayFrom(tracks, start, 0) }
@@ -499,11 +527,68 @@ func (p *Player) Toggle() {
 	}
 }
 
-// Next skips to the next track, wrapping at the end only with repeat all.
+// SetChapters lets Next and Prev move through a book by chapter: f gives the
+// start of each chapter of the book at path, in order, or none. It may be
+// called with the player's lock held, so it must not call the player.
+func (p *Player) SetChapters(f func(path string) []time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.chapters = f
+}
+
+// chapterTarget is where Next (dir > 0) or Prev (dir < 0) takes a book at
+// place at, given where its chapters start: the next chapter, or the start of
+// this one, or the one before when it has only just begun. ok is false when
+// there is no chapter that way, and the track should change instead.
+func chapterTarget(starts []time.Duration, at time.Duration, dir int) (to time.Duration, ok bool) {
+	i := 0
+	for j, s := range starts {
+		if s <= at {
+			i = j
+		}
+	}
+	switch {
+	case len(starts) == 0:
+		return 0, false
+	case dir > 0 && i+1 < len(starts):
+		return starts[i+1], true
+	case dir > 0:
+		return 0, false
+	case i > 0 && at-starts[i] <= restartAfter:
+		return starts[i-1], true
+	case at > restartAfter:
+		return starts[i], true
+	}
+	return 0, false
+}
+
+// chapterStepLocked moves the current book by a chapter, as chapterTarget
+// says. It reports false when the current track isn't a book with chapters,
+// or has no chapter that way.
+func (p *Player) chapterStepLocked(dir int) bool {
+	if p.chapters == nil || p.cur == nil || len(p.queue) == 0 {
+		return false
+	}
+	t := p.queue[p.order[p.pos]]
+	if !t.IsBook() {
+		return false
+	}
+	to, ok := chapterTarget(p.chapters(t.Path), p.placeLocked(), dir)
+	if ok {
+		p.seekLocked(to)
+	}
+	return ok
+}
+
+// Next skips to the next track, wrapping at the end only with repeat all. In
+// a book it skips to the next chapter.
 func (p *Player) Next() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.keepPlayingLocked()
+	if p.chapterStepLocked(1) {
+		return
+	}
 	p.empties, p.skipped = 0, p.now()
 	switch {
 	case len(p.queue) == 0:
@@ -519,11 +604,15 @@ func (p *Player) Next() {
 }
 
 // Prev goes back a track, or restarts the current one once it has played for
-// a few seconds or when it is the first.
+// a few seconds or when it is the first. In a book it goes back a chapter, or
+// to the start of this one once it has played for a few seconds.
 func (p *Player) Prev() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.keepPlayingLocked()
+	if p.chapterStepLocked(-1) {
+		return
+	}
 	p.empties, p.skipped = 0, p.now()
 	if len(p.queue) == 0 {
 		return
@@ -540,6 +629,22 @@ func (p *Player) Seek(d time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.keepPlayingLocked()
+	p.seekLocked(d)
+}
+
+// SeekBy moves the current track by d, which may be negative, from where it
+// is, clamped to its start and end.
+func (p *Player) SeekBy(d time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.keepPlayingLocked()
+	if p.cur == nil || p.curRate <= 0 {
+		return
+	}
+	p.seekLocked(max(p.placeLocked()+d, 0))
+}
+
+func (p *Player) seekLocked(d time.Duration) {
 	if p.cur == nil || p.curRate <= 0 {
 		return
 	}
@@ -849,6 +954,7 @@ func (p *Player) State() State {
 				s.Duration = duration(p.curFrames, p.curRate)
 			}
 		}
+		p.chapterLocked(&s, t)
 		return s
 	}
 	s.Playing, s.Rate, s.Err = st.Playing, st.Rate, st.Err
@@ -859,7 +965,26 @@ func (p *Player) State() State {
 			s.Duration = duration(st.Frames, st.Rate)
 		}
 	}
+	p.chapterLocked(&s, t)
 	return s
+}
+
+// chapterLocked fills in which chapter of the book t, the current track, s is
+// in, from s.Elapsed.
+func (p *Player) chapterLocked(s *State, t Track) {
+	if p.chapters == nil || !t.IsBook() {
+		return
+	}
+	starts := p.chapters(t.Path)
+	if len(starts) == 0 {
+		return
+	}
+	s.Chapters, s.Chapter = len(starts), 1
+	for i, c := range starts {
+		if c <= s.Elapsed {
+			s.Chapter = i + 1
+		}
+	}
 }
 
 // playingLocked reports whether cur is playing. A source the engine hasn't
@@ -876,6 +1001,17 @@ func (p *Player) elapsedLocked() time.Duration {
 		return 0
 	}
 	return duration(st.Frame, st.Rate)
+}
+
+// placeLocked is how far into cur playback is, as State shows it: not behind
+// where cur was started or last sought to, which the engine may not have
+// reached yet. cur must be set and its rate known.
+func (p *Player) placeLocked() time.Duration {
+	st := p.engine.Status()
+	if st.Source != p.cur || st.Rate == 0 {
+		return duration(p.startFrame, p.curRate)
+	}
+	return duration(max(st.Frame, p.startFrame), st.Rate)
 }
 
 func duration(frames int64, rate int) time.Duration {
@@ -920,7 +1056,7 @@ func (p *Player) Snapshot() (Snapshot, bool) {
 			elapsed, total = float64(s.Frame), float64(p.curFrames)
 		}
 	}
-	s.AlbumRun = p.albumRunLocked()
+	s.AlbumRun = p.albumRunLocked() || p.queue[p.order[p.pos]].IsBook()
 	if p.playedOut {
 		s.Frame, s.Fraction = max(p.curFrames, 0), 1
 		return s, true

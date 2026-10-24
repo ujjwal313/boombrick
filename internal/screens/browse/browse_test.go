@@ -4,15 +4,20 @@ import (
 	"fmt"
 	"image"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ujjwal313/boombrick/internal/audible"
+	"github.com/ujjwal313/boombrick/internal/audiobooks"
 	"github.com/ujjwal313/boombrick/internal/fixture"
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/theme"
+	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/uitest"
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
@@ -29,6 +34,7 @@ type fakePlayer struct {
 	played   []string // first path of each Play
 	lists    [][]string
 	start    []int
+	frames   []int64 // where each PlayFrom began
 	queued   [][]string
 	shuffled []bool
 	playing  string
@@ -39,6 +45,10 @@ func (p *fakePlayer) State() player.State {
 }
 func (p *fakePlayer) Play(ts []player.Track, start int) {
 	p.played, p.start = append(p.played, ts[0].Path), append(p.start, start)
+	p.lists = append(p.lists, paths(ts))
+}
+func (p *fakePlayer) PlayFrom(ts []player.Track, start int, frame int64) {
+	p.played, p.start, p.frames = append(p.played, ts[0].Path), append(p.start, start), append(p.frames, frame)
 	p.lists = append(p.lists, paths(ts))
 }
 func (p *fakePlayer) SetShuffle(on bool)        { p.shuffled = append(p.shuffled, on) }
@@ -247,8 +257,8 @@ func TestLibraryShufflesAnArtist(t *testing.T) {
 	}
 }
 
-// With songs tagged, Genres is the last filter: A opens a genre, X shuffles
-// it and Y queues it.
+// With songs tagged, Genres comes after Songs and before Books: A opens a
+// genre, X shuffles it and Y queues it.
 func TestLibraryGenres(t *testing.T) {
 	p, nav := &fakePlayer{}, &fakeNav{}
 	l := New(nav, p, "/m", nil)
@@ -256,8 +266,8 @@ func TestLibraryGenres(t *testing.T) {
 	for range 3 {
 		l.Handle(press(input.R2), t0)
 	}
-	if l.filter != genresFilter || l.Handle(press(input.R2), t0) {
-		t.Fatal("R2 from Songs should show the genres, the last filter")
+	if l.filter != genresFilter {
+		t.Fatal("R2 from Songs should show the genres")
 	}
 	for range 3 {
 		l.Handle(press(input.Down), t0) // Folk, Jazz, Pop, Rock
@@ -278,15 +288,18 @@ func TestLibraryGenres(t *testing.T) {
 	uitest.Golden(t, "library-genres", render(t, l, t0.Add(anim.Focus)))
 }
 
-// A library without genre tags has no Genres filter; one whose genres go
-// while it shows shows the songs instead.
+// A library without genre tags has no Genres filter, so Books follows Songs;
+// one whose genres go while it shows shows the songs instead.
 func TestLibraryHidesGenresWithoutTags(t *testing.T) {
 	l := New(&fakeNav{}, &fakePlayer{}, "/m", nil)
 	l.SetIndex(sampleIndex())
 	l.Handle(press(input.R2), t0)
 	l.Handle(press(input.R2), t0)
-	if l.Handle(press(input.R2), t0) {
-		t.Fatal("R2 on Songs should do nothing without genres")
+	if !l.Handle(press(input.R2), t0) || l.filter != booksFilter || l.Handle(press(input.R2), t0) {
+		t.Fatal("R2 on Songs should skip to Books, the last filter, without genres")
+	}
+	if !l.Handle(press(input.L2), t0) || l.filter != songsFilter {
+		t.Fatal("L2 on Books should go back to Songs without genres")
 	}
 	l.SetIndex(genreIndex())
 	if !l.Handle(press(input.R2), t0) || l.filter != genresFilter {
@@ -318,7 +331,7 @@ func TestLibraryCountsThatDontFit(t *testing.T) {
 	if l.allCounts {
 		t.Fatal("1,000 albums, 100 artists, 10,000 songs and 30 genres can't all show their counts")
 	}
-	l.SetIndex(genreIndex())
+	l.SetIndex(sampleIndex())
 	render(t, l, t0)
 	if !l.allCounts {
 		t.Fatal("a small library's counts all fit")
@@ -456,7 +469,7 @@ func TestNewIndexRowsAreMadeAfresh(t *testing.T) {
 	if r := l.rows[songsFilter][0]; r.subtitle != "Marisol Vega · Salt & Static" || r.duration != "3:42" {
 		t.Fatalf("the first song's row: %q, %q", r.subtitle, r.duration)
 	}
-	if l.counts != [filterCount]string{"1", "1", "1", "0"} {
+	if l.counts != [filterCount]string{"1", "1", "1", "0", "0"} {
 		t.Fatalf("counts %q", l.counts)
 	}
 }
@@ -578,4 +591,248 @@ func TestLibraryAlbumsWithArt(t *testing.T) {
 		l.Draw(u)
 	}
 	uitest.Golden(t, "library-albums-art", off.Image())
+}
+
+func bookIndex() *library.Index {
+	return library.NewIndex([]library.Album{
+		{Artist: "Georges Simenon", Title: "La casa del giudice", Tracks: []library.Track{{Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Title: "La casa del giudice"}}},
+		{Artist: "Odalys", Title: "Northbound", Tracks: []library.Track{{Path: "/m/n/1.flac", Title: "Salt"}}},
+	})
+}
+
+func TestLibraryBooksFilterPlaysFromWhereTheBookWasLeft(t *testing.T) {
+	p := &fakePlayer{}
+	l := New(&fakeNav{}, p, "/m", nil)
+	shelf := NewShelf(p)
+	l.SetShelf(shelf)
+	l.SetIndex(bookIndex())
+	if l.counts != [filterCount]string{"1", "1", "1", "0", "1"} {
+		t.Fatalf("counts %q", l.counts)
+	}
+	l.filter = booksFilter
+	l.Handle(press(input.A), t0)
+	if len(p.played) != 1 || p.played[0] != "/m/Audiobooks/La casa [B0GV1924QD].m4b" || p.frames[0] != 0 {
+		t.Fatalf("played %q from %v", p.played, p.frames)
+	}
+	shelf.SetProgress([]resume.Progress{{Artist: "Georges Simenon", Album: "La casa del giudice", Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Frame: 123456}})
+	l.Handle(press(input.A), t0)
+	if len(p.played) != 2 || p.frames[1] != 123456 {
+		t.Fatalf("played %q from %v, want it to carry on from frame 123456", p.played, p.frames)
+	}
+}
+
+// fakeCatalogue is an Audible library with what each book is doing.
+type fakeCatalogue struct {
+	signedIn  bool
+	status    audiobooks.Status
+	msg       string
+	entries   []audiobooks.Entry
+	downloads []string
+	refreshes int
+}
+
+func (c *fakeCatalogue) SignedIn() bool                      { return c.signedIn }
+func (c *fakeCatalogue) Status() (audiobooks.Status, string) { return c.status, c.msg }
+func (c *fakeCatalogue) Entries() []audiobooks.Entry         { return c.entries }
+func (c *fakeCatalogue) Download(asin string)                { c.downloads = append(c.downloads, asin) }
+func (c *fakeCatalogue) Refresh()                            { c.refreshes++ }
+
+func entry(asin, title string, path string) audiobooks.Entry {
+	return audiobooks.Entry{Book: audible.Book{ASIN: asin, Title: title, Authors: "Georges Simenon", Length: 4*time.Hour + 9*time.Minute}, Path: path}
+}
+
+func TestBooksTabDownloadsWhatIsNotOnTheCardAndPlaysWhatIs(t *testing.T) {
+	p := &fakePlayer{}
+	nav := &fakeNav{}
+	cat := &fakeCatalogue{signedIn: true, status: audiobooks.OK, entries: []audiobooks.Entry{
+		entry("B0H764PGVH", "Firmato Picpus", ""),
+		entry("B0GV1924QD", "La casa del giudice", "/m/Audiobooks/La casa [B0GV1924QD].m4b"),
+	}}
+	b := NewBooks(nav, p, NewShelf(p), cat, "/data/audible/auth.json")
+	b.SetIndex(bookIndex())
+	b.Handle(press(input.A), t0) // the first book isn't on the card
+	if len(cat.downloads) != 1 || cat.downloads[0] != "B0H764PGVH" || len(p.played) != 0 {
+		t.Fatalf("downloads %v, played %v", cat.downloads, p.played)
+	}
+	b.Handle(press(input.Down), t0)
+	b.Handle(press(input.A), t0) // the second is
+	if len(p.played) != 1 || p.played[0] != "/m/Audiobooks/La casa [B0GV1924QD].m4b" || len(cat.downloads) != 1 {
+		t.Fatalf("downloads %v, played %v", cat.downloads, p.played)
+	}
+	b.Handle(press(input.Y), t0) // queue the book on the card
+	if len(p.queued) != 1 {
+		t.Fatalf("queued %v", p.queued)
+	}
+	b.Handle(press(input.X), t0)
+	if cat.refreshes != 1 {
+		t.Fatalf("refreshes %d", cat.refreshes)
+	}
+	// A book already on its way isn't asked for twice.
+	cat.entries[0].State = audiobooks.Downloading
+	b.Handle(press(input.Up), t0)
+	b.Handle(press(input.A), t0)
+	if len(cat.downloads) != 1 {
+		t.Fatalf("downloads %v", cat.downloads)
+	}
+}
+
+func TestBooksTabSaysWhyItIsEmpty(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cat  *fakeCatalogue
+		want string
+	}{
+		{"no account", &fakeCatalogue{}, "Audible isn't set up"},
+		{"reading", &fakeCatalogue{signedIn: true, status: audiobooks.Loading}, "Reading your Audible library"},
+		{"offline", &fakeCatalogue{signedIn: true, status: audiobooks.Offline}, "No network"},
+		{"broken", &fakeCatalogue{signedIn: true, status: audiobooks.Broken, msg: "401"}, "Couldn't read your library"},
+		{"none", &fakeCatalogue{signedIn: true, status: audiobooks.OK}, "Your Audible library is empty"},
+	} {
+		b := NewBooks(&fakeNav{}, &fakePlayer{}, NewShelf(&fakePlayer{}), c.cat, "/data/audible/auth.json")
+		b.sync()
+		if title, _, _, empty := b.emptyState(); !empty || title != c.want {
+			t.Errorf("%s: %q (empty %v), want %q", c.name, title, empty, c.want)
+		}
+		render(t, b, t0) // and it draws
+	}
+}
+
+func TestBooksTabDrawsItsList(t *testing.T) {
+	cat := &fakeCatalogue{signedIn: true, status: audiobooks.OK, entries: []audiobooks.Entry{
+		entry("B0H764PGVH", "Firmato Picpus", ""),
+		{Book: audible.Book{ASIN: "B1", Title: "In arrivo", Authors: "X", Length: time.Hour}, State: audiobooks.Downloading, Progress: 0.42},
+		{Book: audible.Book{ASIN: "B2", Title: "Fallito", Authors: "X"}, State: audiobooks.Failed, Err: "Audible says wait a while, then try again"},
+	}}
+	b := NewBooks(&fakeNav{}, &fakePlayer{}, NewShelf(&fakePlayer{}), cat, "")
+	render(t, b, t0)
+	if r := rowOf(cat.entries[1], ""); r.Duration != "42%" {
+		t.Fatalf("progress shows %q", r.Duration)
+	}
+	if r := rowOf(cat.entries[0], ""); r.Subtitle != "Georges Simenon · 4 h 9 min" {
+		t.Fatalf("subtitle %q", r.Subtitle)
+	}
+	if r := rowOf(cat.entries[2], ""); r.Subtitle != "Audible says wait a while, then try again" {
+		t.Fatalf("failed row %q", r.Subtitle)
+	}
+}
+
+// signalPlayer reports each PlayFrom on a channel, for plays made off the
+// UI thread.
+type signalPlayer struct {
+	fakePlayer
+	from chan int64
+}
+
+func (p *signalPlayer) PlayFrom(ts []player.Track, start int, frame int64) { p.from <- frame }
+
+func TestBookAsksWhereElseItWasLeft(t *testing.T) {
+	p := &signalPlayer{from: make(chan int64, 1)}
+	shelf := NewShelf(p)
+	book := bookIndex().Books[0]
+	when := time.Unix(5000, 0)
+	shelf.SetProgress([]resume.Progress{{Artist: "Georges Simenon", Album: "La casa del giudice",
+		Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Frame: 100, Updated: when}})
+	var asked struct {
+		frame int64
+		when  time.Time
+		has   bool
+	}
+	shelf.SetRemote(func(path string, frame int64, w time.Time, has bool) (int64, bool) {
+		asked.frame, asked.when, asked.has = frame, w, has
+		return 777, true
+	})
+	shelf.Play(book)
+	select {
+	case f := <-p.from:
+		if f != 777 {
+			t.Fatalf("started at %d, want the other device's 777", f)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the book never started")
+	}
+	if asked.frame != 100 || !asked.when.Equal(when) || !asked.has {
+		t.Fatalf("asked with %+v", asked)
+	}
+	// When nothing better is found the card's own place stands.
+	shelf.SetRemote(func(string, int64, time.Time, bool) (int64, bool) { return 0, false })
+	shelf.Play(book)
+	if f := <-p.from; f != 100 {
+		t.Fatalf("started at %d, want the card's 100", f)
+	}
+}
+
+func TestBooksTabOffersToSignIn(t *testing.T) {
+	nav := &fakeNav{}
+	b := NewBooks(nav, &fakePlayer{}, NewShelf(&fakePlayer{}), &fakeCatalogue{}, "/data/audible/auth.json")
+	if title, body, detail, _ := b.emptyState(); title != "Audible isn't set up" || !strings.Contains(body, "Copy your Audible") || detail == "" {
+		t.Fatalf("without a sign-in page: %q %q %q", title, body, detail)
+	}
+	page := &fakeScreen{}
+	b.SetSignIn(func() screens.Screen { return page })
+	if _, body, _, _ := b.emptyState(); !strings.Contains(body, "Press A to sign in") {
+		t.Fatalf("body %q", body)
+	}
+	if hs := b.hints(); hs[0].Key != "A" || hs[0].Label != "Sign in" {
+		t.Fatalf("hints %v", hs)
+	}
+	render(t, b, t0)
+	if !b.Handle(press(input.A), t0) || len(nav.pushed) != 1 || nav.pushed[0] != screens.Screen(page) {
+		t.Fatalf("A pushed %v", nav.pushed)
+	}
+	// Once signed in, the tab is the library's, and A downloads.
+	b.cat = &fakeCatalogue{signedIn: true, status: audiobooks.OK, entries: []audiobooks.Entry{entry("B1", "Un libro", "")}}
+	b.Handle(press(input.A), t0)
+	if len(nav.pushed) != 1 {
+		t.Fatal("A opened the sign-in page while signed in")
+	}
+}
+
+type fakeScreen struct{}
+
+func (*fakeScreen) Handle(input.Event, time.Time) bool { return false }
+func (*fakeScreen) Draw(*ui.Context)                   {}
+func (*fakeScreen) Animating(time.Time) bool           { return false }
+
+// Right on a book opens its page, which does what A and Y do in the tab and
+// scrolls a long description.
+func TestBookPage(t *testing.T) {
+	p, nav := &fakePlayer{}, &fakeNav{}
+	long := strings.Repeat("Una storia lunga, con un caso difficile per l'ispettore. ", 60)
+	e := entry("B0H764PGVH", "Firmato Picpus", "")
+	e.Narrators, e.Series, e.Sequence, e.Percent, e.Summary = "Moro Silo", "Maigret", "7", 12, long
+	cat := &fakeCatalogue{signedIn: true, status: audiobooks.OK, entries: []audiobooks.Entry{e}}
+	b := NewBooks(nav, p, NewShelf(p), cat, "/data/audible/auth.json")
+	b.SetIndex(bookIndex())
+	if !b.Handle(press(input.Right), t0) || len(nav.pushed) != 1 {
+		t.Fatalf("Right pushed %v", nav.pushed)
+	}
+	pg, ok := nav.pushed[0].(*BookPage)
+	if !ok {
+		t.Fatalf("Right opened %T", nav.pushed[0])
+	}
+	render(t, pg, t0)
+	if pg.limit == 0 || !pg.Handle(press(input.Down), t0) || pg.scroll != 1 {
+		t.Fatalf("a long description scrolls: limit %d, scroll %d", pg.limit, pg.scroll)
+	}
+	if !pg.Handle(press(input.Up), t0) || pg.Handle(press(input.Up), t0) {
+		t.Fatal("Up scrolls back to the top and stops there")
+	}
+	pg.Handle(press(input.A), t0)
+	if len(cat.downloads) != 1 || cat.downloads[0] != "B0H764PGVH" {
+		t.Fatalf("A downloaded %v", cat.downloads)
+	}
+	if got := facts(e); !slices.Equal(got, []string{"Maigret, book 7", "Read by Moro Silo", "4 h 9 min", "12% listened"}) {
+		t.Fatalf("facts %q", got)
+	}
+	if r := rowOf(e, ""); r.Subtitle != "Georges Simenon · Maigret, book 7 · 4 h 9 min · 12% listened" {
+		t.Fatalf("row %q", r.Subtitle)
+	}
+	cat.entries[0].Path = "/m/Audiobooks/x [B0H764PGVH].m4b"
+	render(t, pg, t0)
+	cat.entries = nil // gone from the catalogue: the page still draws
+	render(t, pg, t0)
+	empty := NewBooks(nav, p, NewShelf(p), &fakeCatalogue{}, "")
+	if empty.Handle(press(input.Right), t0) {
+		t.Fatal("Right with no account should do nothing")
+	}
 }

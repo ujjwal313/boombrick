@@ -147,3 +147,25 @@ func equal(got []string, want ...string) bool {
 	}
 	return true
 }
+
+func TestIndexKeepsBooksApart(t *testing.T) {
+	ix := NewIndex([]Album{
+		{Artist: "Georges Simenon", Title: "La casa del giudice", Tracks: []Track{{Path: "/m/Audiolibri/La casa.m4b", Title: "La casa del giudice"}}},
+		{Artist: "Abba", Title: "Gold", Tracks: []Track{{Path: "/m/Abba/01.m4a", Title: "Waterloo"}}},
+		{Artist: "Mix", Title: "Mix", Tracks: []Track{{Path: "/m/mix/1.mp3"}, {Path: "/m/mix/2.M4B"}}},
+	})
+	if len(ix.Books) != 1 || ix.Books[0].Title != "La casa del giudice" {
+		t.Fatalf("books: %v", ix.Books)
+	}
+	if len(ix.Albums) != 2 || len(ix.Songs) != 3 {
+		t.Errorf("a book leaked into albums or songs: %d albums, %d songs", len(ix.Albums), len(ix.Songs))
+	}
+	if ix.Album("Georges Simenon", "La casa del giudice") == nil {
+		t.Error("Continue listening can't find the book")
+	}
+	for _, a := range ix.Artists {
+		if a.Name == "Georges Simenon" {
+			t.Error("a book's author is listed as an artist")
+		}
+	}
+}

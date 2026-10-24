@@ -34,6 +34,7 @@ type Index struct {
 	Artists []*Artist // by name
 	Songs   []*Track  // by title
 	Genres  []*Genre  // by name
+	Books   []*Album  // audiobooks, by author and title; they are in no other list
 	byKey   map[[2]string]*Album
 	spotify map[string]*Track // the files imports downloaded, by Spotify ID
 }
@@ -54,6 +55,11 @@ func NewIndex(albums []Album) *Index {
 	artists := map[string]*Artist{}
 	for i := range albums {
 		a := &albums[i]
+		if a.IsBook() {
+			ix.Books = append(ix.Books, a)
+			ix.byKey[[2]string{a.Artist, a.Title}] = a // for Continue listening
+			continue
+		}
 		ix.Recent = append(ix.Recent, a)
 		ix.byKey[[2]string{a.Artist, a.Title}] = a
 		ar := artists[a.Artist]
@@ -76,6 +82,9 @@ func NewIndex(albums []Album) *Index {
 		return cmp.Or(Compare(x.Title, y.Title), Compare(x.Artist, y.Artist))
 	})
 	slices.SortStableFunc(ix.Artists, func(x, y *Artist) int { return Compare(x.Name, y.Name) })
+	slices.SortStableFunc(ix.Books, func(x, y *Album) int {
+		return cmp.Or(Compare(x.Artist, y.Artist), Compare(x.Title, y.Title))
+	})
 	for _, ar := range ix.Artists {
 		slices.SortStableFunc(ar.Albums, func(x, y *Album) int {
 			return cmp.Or(cmp.Compare(x.Year, y.Year), Compare(x.Title, y.Title))

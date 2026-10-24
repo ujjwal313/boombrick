@@ -212,7 +212,7 @@ func (pg *AlbumPage) Draw(u *ui.Context) {
 	u.PopClip()
 
 	widgets.StatusBar(u)
-	widgets.Tabs(u, 1)
+	widgets.Tabs(u, screens.LibraryTab)
 	widgets.HintBar(u, pg.hints())
 }
 

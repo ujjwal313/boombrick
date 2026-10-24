@@ -13,6 +13,7 @@ import (
 type Player interface {
 	State() player.State
 	Play(tracks []player.Track, start int)
+	PlayFrom(tracks []player.Track, start int, frame int64)
 	SetShuffle(on bool)
 	Enqueue(tracks []player.Track)
 }

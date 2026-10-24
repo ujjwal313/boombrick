@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"fmt"
 	"image/color"
+	"math"
 	"strconv"
 	"time"
 
@@ -27,6 +28,9 @@ type Player interface {
 	Toggle()
 	Next()
 	Prev()
+	SeekBy(d time.Duration)
+	BookSpeed() float64
+	SetBookSpeed(s float64)
 	SetShuffle(on bool)
 	CycleRepeat()
 }
@@ -40,6 +44,26 @@ const (
 	repeatCtl
 	controlCount
 )
+
+// speeds are what X goes through, a book's speed being one of them.
+var speeds = []float64{1, 1.25, 1.5, 1.75, 2, 0.75}
+
+// nextSpeed is the speed after cur in speeds, or the first if cur is none of
+// them.
+func nextSpeed(cur float64) float64 {
+	for i, v := range speeds {
+		if math.Abs(v-cur) < 0.01 {
+			return speeds[(i+1)%len(speeds)]
+		}
+	}
+	return speeds[0]
+}
+
+// SetOnSpeed has f told each speed a book is set to, to keep it.
+func (n *NowPlaying) SetOnSpeed(f func(float64)) { n.onSpeed = f }
+
+// skipBy is how far L2 and R2 move an audiobook.
+const skipBy = 15 * time.Second
 
 // lyricsPill is the focus index of the Lyrics pill, under the controls.
 const lyricsPill = controlCount
@@ -92,6 +116,11 @@ type NowPlaying struct {
 	formatOf        formatKey
 	hintBar         []widgets.Hint
 	hintLabel       string // A's label in hintBar
+	hintBook        bool   // whether hintBar is an audiobook's
+	hintSpeed       float64
+	onSpeed         func(float64) // hears the speed a book is set to
+	chapterOf       int           // the chapter chapterLine says
+	chapterLine     string
 }
 
 // formatKey is what formatLine depends on.
@@ -248,6 +277,28 @@ func (n *NowPlaying) Handle(ev input.Event, now time.Time) bool {
 		}
 		n.lyrics()
 		return true
+	case input.X:
+		// Audiobooks only: the next of the speeds a book plays at.
+		if ev.Kind != input.Press || !n.p.State().Track.IsBook() {
+			return false
+		}
+		v := nextSpeed(n.p.BookSpeed())
+		n.p.SetBookSpeed(v)
+		if n.onSpeed != nil {
+			n.onSpeed(v)
+		}
+		return true
+	case input.L2, input.R2:
+		// Audiobooks only: 15 seconds back or on, as a book is listened to.
+		if ev.Kind != input.Press || !n.p.State().Track.IsBook() {
+			return false
+		}
+		d := -skipBy
+		if ev.Button == input.R2 {
+			d = skipBy
+		}
+		n.p.SeekBy(d)
+		return true
 	case input.L1:
 		n.p.Prev()
 		return true
@@ -325,7 +376,7 @@ func (n *NowPlaying) Draw(u *ui.Context) {
 	y += titleH
 	u.Text(u.Fit(s.Track.Artist, artistStyle, w), artistStyle, x, y, theme.Paper)
 	y += artistH
-	u.Text(u.Fit(s.Track.Album, albumStyle, w), albumStyle, x, y, theme.Ink2)
+	u.Text(u.Fit(n.line3(s), albumStyle, w), albumStyle, x, y, theme.Ink2)
 	y += albumH + groupGap
 	f, left, right := n.progress(s)
 	drawProgress(u, f, left, right, x, y, w)
@@ -447,13 +498,30 @@ func (n *NowPlaying) hints(s player.State) []widgets.Hint {
 			label = "Play"
 		}
 	}
-	if n.hintBar != nil && label == n.hintLabel {
+	if n.hintBar != nil && label == n.hintLabel && s.Track.IsBook() == n.hintBook && n.p.BookSpeed() == n.hintSpeed {
 		return n.hintBar
 	}
 	hints := []widgets.Hint{{Key: "A", Label: label}, {Key: "B", Label: "Back"}}
 	if n.lyrics != nil {
 		hints = append(hints, widgets.Hint{Key: "Y", Label: "Lyrics"})
 	}
-	n.hintBar, n.hintLabel = append(hints, widgets.Hint{Key: "L1/R1", Label: "Track"}), label
+	if s.Track.IsBook() {
+		hints = append(hints, widgets.Hint{Key: "X", Label: "Speed " + strconv.FormatFloat(n.p.BookSpeed(), 'f', -1, 64) + "×"},
+			widgets.Hint{Key: "L2/R2", Label: "15 s"}, widgets.Hint{Key: "L1/R1", Label: "Chapter"})
+	} else {
+		hints = append(hints, widgets.Hint{Key: "L1/R1", Label: "Track"})
+	}
+	n.hintBar, n.hintLabel, n.hintBook, n.hintSpeed = hints, label, s.Track.IsBook(), n.p.BookSpeed()
 	return n.hintBar
+}
+
+// line3 is the line under the artist: the album, or a book's chapter.
+func (n *NowPlaying) line3(s player.State) string {
+	if s.Chapters == 0 {
+		return s.Track.Album
+	}
+	if s.Chapter != n.chapterOf {
+		n.chapterOf, n.chapterLine = s.Chapter, "Chapter "+strconv.Itoa(s.Chapter)+" of "+strconv.Itoa(s.Chapters)
+	}
+	return n.chapterLine
 }

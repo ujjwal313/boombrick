@@ -121,6 +121,9 @@ func (s *shell) pop(now time.Time) {
 		return
 	}
 	s.leaving = st[len(st)-1]
+	if c, ok := s.leaving.(screens.Closer); ok {
+		c.Close()
+	}
 	st[len(st)-1] = nil
 	s.stacks[s.tab] = st[:len(st)-1]
 	s.trans.To(0, now, anim.Push, anim.EaseOutCubic)

@@ -16,7 +16,8 @@ echo "Third-party licences for Boombrick and its Spotify helper. NOTICE lists"
 echo "the components; this file holds their licences in full."
 
 title "Go $(go version "$1" | awk '{ print $NF }' | sed 's/^go//'), its standard library and runtime"
-cat "$(go env GOROOT)/LICENSE"
+# Some distributions' Go keeps its licence apart from GOROOT.
+cat "$(go env GOROOT)/LICENSE" 2>/dev/null || cat /usr/share/licenses/golang/LICENSE
 
 # Each dep line, or the module replacing it. Modules replaced by a folder in
 # this repository are Boombrick's own, or a modified copy whose licence is in

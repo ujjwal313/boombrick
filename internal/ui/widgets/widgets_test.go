@@ -558,3 +558,21 @@ func TestVolumePill(t *testing.T) {
 	VolumePill(u, 14, 1)
 	uitest.Golden(t, "volume-pill", off.Image())
 }
+
+func TestTabsScrollOnlyWhenTheNamesDontFit(t *testing.T) {
+	// 900 of names in 800 of room: the active one is brought towards the middle
+	// without leaving a gap at either end.
+	for _, c := range []struct {
+		name                     string
+		total, view, x, w, shift float32
+	}{
+		{"everything fits", 700, 800, 500, 100, 0},
+		{"the first", 900, 800, 0, 100, 0},
+		{"the middle", 900, 800, 400, 100, 50},
+		{"the last", 900, 800, 800, 100, 100},
+	} {
+		if got := tabsScroll(c.total, c.view, c.x, c.w); got != c.shift {
+			t.Errorf("%s: shifted %v, want %v", c.name, got, c.shift)
+		}
+	}
+}

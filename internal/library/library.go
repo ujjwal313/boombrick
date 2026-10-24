@@ -42,6 +42,24 @@ type Album struct {
 	mtime         int64 // the newest file's, to order albums added by one scan
 }
 
+// bookExt is the extension of an audiobook: a file with it, on its own or in
+// parts, is a book, not an album.
+const bookExt = ".m4b"
+
+// IsBook reports whether the track is an audiobook.
+func (t Track) IsBook() bool { return strings.EqualFold(filepath.Ext(t.Path), bookExt) }
+
+// IsBook reports whether the album is an audiobook: it has tracks, and all
+// of them are books.
+func (a Album) IsBook() bool {
+	for _, t := range a.Tracks {
+		if !t.IsBook() {
+			return false
+		}
+	}
+	return len(a.Tracks) > 0
+}
+
 // Stats summarises a scan.
 type Stats struct {
 	Added, Updated, Removed, Total int

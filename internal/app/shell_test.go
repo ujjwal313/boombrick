@@ -456,3 +456,23 @@ func TestToastAndVolumePillReplaceEachOther(t *testing.T) {
 		t.Fatal("the pill should replace the toast, and last 1.5 s")
 	}
 }
+
+type closing struct {
+	page
+	closed int
+}
+
+func (c *closing) Close() { c.closed++ }
+
+func TestAPageThatClosesIsToldSo(t *testing.T) {
+	s, _, _ := testShell()
+	c := &closing{}
+	s.push(c, t0)
+	if c.closed != 0 {
+		t.Fatal("closed on opening")
+	}
+	s.pop(t0)
+	if c.closed != 1 {
+		t.Fatalf("closed %d times on popping", c.closed)
+	}
+}

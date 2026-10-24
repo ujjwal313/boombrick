@@ -29,7 +29,7 @@ type Source interface {
 }
 
 // tab is the Downloads tab's place in the tab row.
-const tab = 4
+const tab = screens.DownloadsTab
 
 // Layout: the storage card under the tabs, then the queue
 // in 66 px rows, each heading a row of its own.

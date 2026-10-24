@@ -18,7 +18,9 @@ import (
 
 	"github.com/ujjwal313/boombrick/internal/app"
 	"github.com/ujjwal313/boombrick/internal/art"
+	"github.com/ujjwal313/boombrick/internal/audible"
 	"github.com/ujjwal313/boombrick/internal/audio/decode"
+	"github.com/ujjwal313/boombrick/internal/audiobooks"
 	"github.com/ujjwal313/boombrick/internal/background"
 	"github.com/ujjwal313/boombrick/internal/download"
 	"github.com/ujjwal313/boombrick/internal/importer"
@@ -31,6 +33,8 @@ import (
 	"github.com/ujjwal313/boombrick/internal/player"
 	"github.com/ujjwal313/boombrick/internal/release"
 	"github.com/ujjwal313/boombrick/internal/resume"
+	"github.com/ujjwal313/boombrick/internal/screens"
+	audibleui "github.com/ujjwal313/boombrick/internal/screens/audible"
 	"github.com/ujjwal313/boombrick/internal/selfupdate"
 	"github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/space"
@@ -244,7 +248,8 @@ func run(started time.Time) error {
 	// restore before the database closes under them.
 	ctx, cancel := context.WithCancel(context.Background())
 	scanDone, saved := make(chan struct{}), make(chan struct{})
-	defer func() { cancel(); <-scanDone; <-saved; <-restored }()
+	booksDone := make(chan struct{}) // closed once the Audible sync, if any, has stopped
+	defer func() { cancel(); <-scanDone; <-saved; <-restored; <-booksDone }()
 
 	// Scans run one at a time on their own goroutine: at start-up, then each
 	// time the app asks. Asking while a scan runs queues one more. The app
@@ -317,6 +322,54 @@ func run(started time.Time) error {
 		keepSaving(ctx, 5*time.Second, p.State, save, savedTrack)
 	}()
 
+	// Audiobooks keep their place in step with Audible when the device has a
+	// registration to sign in with (see internal/audible); without one, or
+	// without Wi-Fi, they keep it on the card alone.
+	var books *bookSync
+	var audibleClient *audible.Client
+	if ac, err := audible.Load(filepath.Join(paths.Data, "audible", "auth.json"), web); err == nil {
+		audibleClient = ac
+		books = newBookSync(ac, online, log)
+		log.Info("audible", "signed in", true)
+	} else if errors.Is(err, audible.ErrOldDevice) {
+		log.Warn("audible", "err", err) // the Books tab asks to sign in again
+	} else if !errors.Is(err, audible.ErrNoAuth) {
+		log.Warn("audible", "err", err)
+	}
+	// The Books tab lists the Audible library and downloads from it, when
+	// there is a registration; without one it says how to set one up.
+	authFile := filepath.Join(paths.Data, "audible", "auth.json")
+	var api audiobooks.API
+	if audibleClient != nil {
+		api = audibleClient
+	}
+	catalogue := audiobooks.New(audiobooks.Options{
+		API: api, Dir: filepath.Join(paths.Music, "Audiobooks"), Cache: filepath.Join(paths.Data, "audible", "library.json"),
+		FFmpeg: filepath.Join(dir, "bin", "ffmpeg"), Online: online, Log: log,
+		Filed: func(string) { rescan() }, // the Library finds the book with the next scan
+	})
+	defer catalogue.Close()
+	catalogue.Refresh()
+	// A phone signs the device in from the Books tab. The library and the
+	// downloads work at once; the places start to be kept in step with Audible
+	// the next time Boombrick starts.
+	var nav screens.Nav // the app, once it exists
+	signIn := func() screens.Screen {
+		si := audible.NewSignIn(authFile, web, func(c *audible.Client) {
+			log.Info("audible", "signed in", true)
+			catalogue.SetAPI(c)
+		})
+		return audibleui.NewSignIn(nav, si)
+	}
+	if books != nil {
+		go func() {
+			defer close(booksDone)
+			keepBooksSynced(ctx, syncEvery/3, p.State, books)
+		}()
+	} else {
+		close(booksDone)
+	}
+
 	// NextUI's volume keys change the volume NextUI keeps in a file, read for
 	// the volume pill; the app has it read when a button is pressed.
 	var volume *platform.VolumeWatcher
@@ -333,10 +386,12 @@ func run(started time.Time) error {
 		Player:     p,
 		MusicDir:   paths.Music,
 		Load:       func() (*library.Index, error) { return library.Load(db.DB) },
-		Progress:   func() ([]resume.Progress, error) { return resume.Recent(db.DB, 8) },
-		Rescan:     rescan,
-		Scanned:    scanned,
-		Saved:      savedTrack,
+		Progress:   func() ([]resume.Progress, error) { return resume.Recent(db.DB, 200) },
+		BookStart:  bookStart(books),
+		Catalogue:  catalogue, CatalogueReady: catalogue.Ready(), AudibleSetup: authFile, AudibleSignIn: signIn,
+		Rescan:  rescan,
+		Scanned: scanned,
+		Saved:   savedTrack,
 		Status: func() platform.Status {
 			st := platform.ReadStatus("/sys")
 			st.Bluetooth = bt.Connected()
@@ -382,6 +437,7 @@ func run(started time.Time) error {
 		return err
 	}
 	defer a.Close()
+	nav = a
 	// The volume watcher stops before the app and SDL close under it.
 	if volume != nil {
 		vol, stop := context.WithCancel(context.Background())

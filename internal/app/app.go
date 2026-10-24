@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,7 @@ import (
 	settingsscreen "github.com/ujjwal313/boombrick/internal/screens/settings"
 	spotifyscreen "github.com/ujjwal313/boombrick/internal/screens/spotify"
 	"github.com/ujjwal313/boombrick/internal/screens/youtube"
+	"github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/spotify"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
@@ -54,9 +56,20 @@ type Options struct {
 	// progress moved on to another track or stopped.
 	Load     func() (*library.Index, error)
 	Progress func() ([]resume.Progress, error)
-	Rescan   func()
-	Scanned  <-chan ScanUpdate
-	Saved    <-chan struct{}
+	// BookStart, if set, says whether an audiobook was left further on
+	// elsewhere (see browse.Remote).
+	BookStart browse.Remote
+	// Catalogue is the Audible library for the Books tab, with the channel
+	// that says it has changed and the file a registration is read from.
+	Catalogue      browse.Catalogue
+	CatalogueReady <-chan struct{}
+	AudibleSetup   string
+	// AudibleSignIn makes the page that signs in to Audible with a phone; nil
+	// leaves the Books tab asking for the registration file.
+	AudibleSignIn func() screens.Screen
+	Rescan        func()
+	Scanned       <-chan ScanUpdate
+	Saved         <-chan struct{}
 	// Status reads the battery, network and Bluetooth for the status bar; the
 	// app calls it on a goroutine every 10 s from start-up while the screen is
 	// on, and as it comes back on.
@@ -216,6 +229,8 @@ type App struct {
 	nowPlaying *nowplaying.NowPlaying
 	music      transport // the player, for the buttons heard with the screen off
 	library    *browse.Library
+	books      *browse.Books // nil without an Audible catalogue
+	shelf      *browse.Shelf
 	queue      *queue.Queue
 	shell      *shell
 	ix         *library.Index
@@ -342,6 +357,21 @@ func New(opts Options) (*App, error) {
 	}
 	a.home.SetEmpty(opts.MusicDir, func() { a.rescan(); a.Toast(screens.Scanning) })
 	a.library = browse.New(a, opts.Player, opts.MusicDir, a.rescan)
+	a.shelf = browse.NewShelf(opts.Player)
+	a.shelf.SetRemote(opts.BookStart)
+	a.library.SetShelf(a.shelf)
+	var books screens.Screen = &screens.Placeholder{Tab: screens.BooksTab, Title: "Books"}
+	if opts.Catalogue != nil {
+		a.books = browse.NewBooks(a, opts.Player, a.shelf, opts.Catalogue, opts.AudibleSetup)
+		a.books.SetSignIn(opts.AudibleSignIn)
+		books = a.books
+		if opts.CatalogueReady != nil {
+			a.forward(opts.CatalogueReady, &a.redraw)
+		}
+	}
+	if opts.Prefs != nil {
+		a.nowPlaying.SetOnSpeed(func(v float64) { opts.Prefs.Set(settings.BookSpeed, strconv.FormatFloat(v, 'f', -1, 64)) })
+	}
 	a.loads = newLoader(opts.Load, opts.Progress, a.wake)
 	if opts.Scanned != nil {
 		go func() {
@@ -373,7 +403,7 @@ func New(opts Options) (*App, error) {
 	if opts.MusicDir != "" {
 		screens.SetDownloadsDir(filepath.Join(opts.MusicDir, "Boombrick"))
 	}
-	var ytTab, dlTab screens.Screen = &screens.Placeholder{Tab: 3, Title: "YouTube"}, &screens.Placeholder{Tab: 4, Title: "Downloads"}
+	var ytTab, dlTab screens.Screen = &screens.Placeholder{Tab: screens.YouTubeTab, Title: "YouTube"}, &screens.Placeholder{Tab: screens.DownloadsTab, Title: "Downloads"}
 	var acts youtube.Downloads // stays nil without a queue
 	if opts.Downloads != nil {
 		acts = ytActions{dl: opts.Downloads, p: opts.Player, toast: a.Toast}
@@ -395,6 +425,7 @@ func New(opts Options) (*App, error) {
 	}
 	a.shell = newShell(a.home,
 		a.library,
+		books,
 		spTab,
 		ytTab,
 		dlTab)
@@ -614,6 +645,9 @@ func (a *App) poll() {
 				if r.ix != nil {
 					a.ix = r.ix
 					a.library.SetIndex(r.ix)
+					if a.books != nil {
+						a.books.SetIndex(r.ix)
+					}
 					a.opts.Log.Info("loaded library", "albums", len(r.ix.Albums), "artists", len(r.ix.Artists),
 						"songs", len(r.ix.Songs), "in_progress", len(r.progress), "took", r.took.Round(time.Millisecond))
 				}
@@ -719,6 +753,7 @@ func (a *App) colours() colours {
 // showHome fills Home's rows from the index and the albums in progress.
 func (a *App) showHome(progress []resume.Progress) {
 	a.progress = progress
+	a.shelf.SetProgress(progress)
 	if a.ix == nil {
 		return
 	}

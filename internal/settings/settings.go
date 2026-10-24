@@ -17,6 +17,7 @@ const (
 	DownloadQuality  = "downloads.quality"
 	PreferDownloaded = "playback.prefer_downloaded"
 	VolumeLevelling  = "playback.volume_levelling"
+	BookSpeed        = "playback.book_speed"
 )
 
 // Defaults holds the value used for a key that has never been set.
@@ -25,6 +26,7 @@ var Defaults = map[string]string{
 	DownloadQuality:  "best",
 	PreferDownloaded: "true",
 	VolumeLevelling:  "true",
+	BookSpeed:        "1",
 }
 
 // Settings keeps the table in memory and writes changes behind the caller.

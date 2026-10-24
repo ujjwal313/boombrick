@@ -5,13 +5,14 @@ import (
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/screens"
 	spotifyscreen "github.com/ujjwal313/boombrick/internal/screens/spotify"
 	keys "github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/spotify"
 )
 
 // spotifyTab is the Spotify tab's place in the tab row.
-const spotifyTab = 2
+const spotifyTab = screens.SpotifyTab
 
 // Spotify is the Spotify library: the tab's, Home's row's and Settings'.
 // *spotify.Library is one.

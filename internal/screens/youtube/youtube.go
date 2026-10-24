@@ -18,7 +18,7 @@ import (
 )
 
 // tab is the YouTube tab's place in the tab row.
-const tab = 3
+const tab = screens.YouTubeTab
 
 // Source is YouTube Music as these screens ask it: each call returns what
 // has come and asks for what hasn't. *ytmusic.Searcher is one.
