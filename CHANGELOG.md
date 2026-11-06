@@ -2,6 +2,12 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.4.1]
+
+### Fixed
+
+- **Play in background** works with a USB-C DAC. Boombrick now lets go of the sound card before it hands the music over, so the background player can open the DAC instead of failing with "Couldn't play in the background".
+
 ## [v0.4.0]
 
 ### Added
