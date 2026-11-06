@@ -154,6 +154,35 @@ func TestReadTagsGenres(t *testing.T) {
 	}
 }
 
+// Disc and track numbers the tag package can't read are read from the tags
+// themselves: ID3's with a space before the number, and Vorbis's DISC.
+func TestReadTagsDiscAndTrackFallbacks(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		file  []byte
+		disc  int
+		track int
+	}{
+		{"ID3 numbers with spaces", []byte(id3(map[string]string{"TPOS": " 2", "TRCK": " 3"})), 2, 3},
+		{"a Vorbis DISC", flacWith("DISC=2", "TRACKNUMBER=3"), 2, 3},
+		{"a Vorbis DISC after an empty DISCNUMBER", flacWith("DISCNUMBER=", "DISC=2", "TRACKNUMBER=3"), 2, 3},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "x")
+			if err := os.WriteFile(path, c.file, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tags, err := ReadTags(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tags.Disc != c.disc || tags.Track != c.track {
+				t.Fatalf("disc %d track %d, want %d and %d", tags.Disc, tags.Track, c.disc, c.track)
+			}
+		})
+	}
+}
+
 func TestReplayGainFromR128(t *testing.T) {
 	// Opus R128 gains are Q7.8 dB against -23 LUFS, 5 dB below ReplayGain's
 	// reference: -1280 is -5 dB, which is 0 dB in ReplayGain terms.
@@ -182,6 +211,10 @@ func TestRawText(t *testing.T) {
 	}
 	if got := rawText(raw, "album_artist", "album artist", "albumartist"); got != "Other" {
 		t.Errorf("first key present wins: got %q", got)
+	}
+	raw["album_artist"] = " \x00"
+	if got := rawText(raw, "album_artist", "album artist"); got != "Other" {
+		t.Errorf("an empty value counts as missing: got %q", got)
 	}
 	if got := rawText(raw, "albumartist"); got != "Odalys" {
 		t.Errorf("plain value = %q, want it trimmed", got)

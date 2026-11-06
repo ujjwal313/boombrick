@@ -55,12 +55,13 @@ func ReadTags(path string) (t Tags, err error) {
 	}
 	t.Track, _ = m.Track()
 	t.Disc, _ = m.Disc()
-	// Vorbis comments often hold "3/10", which the tag package reads as 0.
+	// The tag package reads 0 for Vorbis's "3/10", for ID3's number with a
+	// space before it, and for the disc some taggers write as Vorbis's DISC.
 	if t.Track == 0 {
-		t.Track = leadingInt(rawText(m.Raw(), "tracknumber"))
+		t.Track = leadingInt(rawText(m.Raw(), "tracknumber", "trck", "trk"))
 	}
 	if t.Disc == 0 {
-		t.Disc = leadingInt(rawText(m.Raw(), "discnumber"))
+		t.Disc = leadingInt(rawText(m.Raw(), "discnumber", "disc", "tpos", "tpa"))
 	}
 	if t.AlbumArtist == "" {
 		t.AlbumArtist = rawText(m.Raw(), "album_artist", "album artist", "albumartist")
@@ -174,22 +175,27 @@ func leadingInt(s string) int {
 	return n
 }
 
-// rawText finds the first of keys in raw tags, ignoring case and trying keys in
-// the order given, whether stored as a plain value or as an ID3 TXXX frame whose
-// description is the key. The value is trimmed of spaces and of the NUL that
-// ffmpeg ends ID3 text frames with.
+// rawText finds the first of keys with a value in raw tags, ignoring case and
+// trying keys in the order given, whether stored as a plain value or as an ID3
+// TXXX frame whose description is the key. The value is trimmed of spaces and
+// of the NUL that ffmpeg ends ID3 text frames with; one left empty counts as
+// missing.
 func rawText(raw map[string]interface{}, keys ...string) string {
 	for _, want := range keys {
 		for k, v := range raw {
+			var s string
 			switch v := v.(type) {
 			case string:
 				if strings.EqualFold(k, want) {
-					return cleanText(v)
+					s = cleanText(v)
 				}
 			case *tag.Comm:
 				if strings.EqualFold(v.Description, want) {
-					return cleanText(v.Text)
+					s = cleanText(v.Text)
 				}
+			}
+			if s != "" {
+				return s
 			}
 		}
 	}
