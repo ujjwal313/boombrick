@@ -13,18 +13,21 @@ import (
 	"github.com/ujjwal313/boombrick/internal/resume"
 )
 
-// seen is what a save or a hand-over found: whether the lock was held, and
-// whether the music played.
-type seen struct{ held, playing bool }
+// seen is what a save or a hand-over found: whether the lock was held,
+// whether the music played, and whether the sound card was let go.
+type seen struct{ held, playing, released bool }
 
-// source is the player Boombrick hands the music over from.
+// source is the player Boombrick hands the music over from. Like the player,
+// it opens the sound card again when it plays.
 type source struct {
 	fakePlayer
-	playing bool
-	lock    string // looked at when it saves
-	saved   []player.Snapshot
-	left    []resume.Handover
-	saw     []seen
+	playing  bool
+	released bool // the sound card is let go
+	releases int
+	lock     string // looked at when it saves
+	saved    []player.Snapshot
+	left     []resume.Handover
+	saw      []seen
 }
 
 func (s *source) State() player.State {
@@ -34,6 +37,14 @@ func (s *source) State() player.State {
 func (s *source) Toggle() {
 	s.fakePlayer.Toggle()
 	s.playing = !s.playing
+	if s.playing {
+		s.released = false
+	}
+}
+
+func (s *source) Release() {
+	s.playing, s.released = false, true
+	s.releases++
 }
 
 func (s *source) look() {
@@ -41,7 +52,7 @@ func (s *source) look() {
 		return
 	}
 	_, held, _ := Holder(s.lock)
-	s.saw = append(s.saw, seen{held, s.playing})
+	s.saw = append(s.saw, seen{held, s.playing, s.released})
 }
 
 func (s *source) save(snap player.Snapshot) error {
@@ -73,9 +84,11 @@ func (f *fadingSource) Toggle() {
 	f.source.Toggle()
 }
 
-// Handing over pauses the music, saves the queue with what goes with it, and
-// returns once the background player plays; the queue is saved and the
-// hand-over written after the pause and before the player starts.
+// Handing over pauses the music, lets go of the sound card, saves the queue
+// with what goes with it, and returns once the background player plays; the
+// queue is saved and the hand-over written after the card is let go and before
+// the player starts. A sound card that takes one program at a time, as a USB
+// DAC's, would otherwise turn the background player away.
 func TestHandOver(t *testing.T) {
 	path := lockPath(t)
 	s := &source{playing: true, lock: path}
@@ -87,8 +100,11 @@ func TestHandOver(t *testing.T) {
 	if s.playing || len(s.saved) != 1 || !slices.Equal(s.left, []resume.Handover{{Playing: true, Sleep: s.sleep}}) {
 		t.Fatalf("playing %v, saves %d, hand-overs %+v", s.playing, len(s.saved), s.left)
 	}
-	if !slices.Equal(s.saw, []seen{{}, {}}) {
-		t.Fatalf("the save and the hand-over saw (lock held, playing) %+v, want a free lock and a pause", s.saw)
+	if want := []seen{{released: true}, {released: true}}; !slices.Equal(s.saw, want) {
+		t.Fatalf("the save and the hand-over saw (lock held, playing, card let go) %+v, want %+v", s.saw, want)
+	}
+	if s.releases != 1 || !s.released {
+		t.Fatalf("the sound card was let go %d times, and is let go %v; want once, and still", s.releases, s.released)
 	}
 	if _, held, _ := Holder(path); !held {
 		t.Fatal("no background player holds the lock")
@@ -134,15 +150,15 @@ func TestHandOverUndone(t *testing.T) {
 	if len(s.left) == 0 {
 		t.Fatal("the hand-over was never written")
 	}
-	if !s.playing || s.left[len(s.left)-1] != (resume.Handover{}) {
-		t.Fatalf("playing %v, hand-overs %+v", s.playing, s.left)
+	if !s.playing || s.released || s.left[len(s.left)-1] != (resume.Handover{}) {
+		t.Fatalf("playing %v, card let go %v, hand-overs %+v", s.playing, s.released, s.left)
 	}
 	if _, held, _ := Holder(path); held {
 		t.Fatal("the player that failed still holds the lock")
 	}
 	idle := &source{}
-	if err := HandOver(idle, idle.save, idle.handover, os.Args[0], childEnv("hold", path), time.Second); err == nil || idle.toggles != 0 {
-		t.Fatalf("with nothing playing: %v, %d toggles", err, idle.toggles)
+	if err := HandOver(idle, idle.save, idle.handover, os.Args[0], childEnv("hold", path), time.Second); err == nil || idle.toggles != 0 || idle.releases != 0 {
+		t.Fatalf("with nothing playing: %v, %d toggles, %d releases", err, idle.toggles, idle.releases)
 	}
 }
 

@@ -79,6 +79,7 @@ type Engine struct {
 	back     int64 // source frames the pause took off Frame, which the replay restores
 	fadeOut  fadeOut
 	fadeEnd  fadeEnd
+	release  chan struct{} // closed once the loop has let go of the output; nil when none is asked for
 	closed   bool
 	st       Status
 
@@ -221,6 +222,25 @@ func (e *Engine) Stop() { e.Play(nil) }
 // A FadeOut under way ends.
 func (e *Engine) Pause() { e.set(func() { e.paused, e.fadeOut = true, fadeOut{} }) }
 
+// Release pauses playback, as Pause does, and closes the output, returning once
+// it has: another program can then open a device that takes one at a time, as
+// a USB DAC's may. Resume opens it again, or a new source does. It returns at
+// once on a closed engine.
+func (e *Engine) Release() {
+	var done chan struct{}
+	e.set(func() {
+		e.paused, e.fadeOut = true, fadeOut{}
+		if e.release == nil {
+			e.release = make(chan struct{})
+		}
+		done = e.release
+	})
+	select {
+	case <-done:
+	case <-e.done:
+	}
+}
+
 // Resume continues after Pause or Cue, after an output error paused playback,
 // or after a FadeOut, at full volume.
 func (e *Engine) Resume() { e.set(func() { e.paused, e.st.Err, e.fadeOut = false, nil, fadeOut{} }) }
@@ -358,6 +378,15 @@ func (e *Engine) loop() {
 				}
 				e.quiet = true
 				e.mu.Unlock()
+				continue
+			}
+			if done := e.release; done != nil {
+				// Once dropped, nothing is lost in closing: the next write
+				// opens the output again.
+				e.release = nil
+				e.mu.Unlock()
+				e.out.Close()
+				close(done)
 				continue
 			}
 			e.quiet = true

@@ -13,6 +13,7 @@ import (
 type Source interface {
 	State() player.State
 	Toggle()
+	Release()
 	Snapshot() (player.Snapshot, bool)
 	Sleep() player.Sleep
 	ResumeSleep(s player.Sleep)
@@ -21,10 +22,12 @@ type Source interface {
 var _ Source = (*player.Player)(nil)
 
 // HandOver hands the music to a new background player, exe run with
-// --background: it pauses p on the sample reached, saves the queue and what
-// goes with it, the sleep timer as it was, and waits up to wait for the player
-// to play. When that fails the hand-over is undone, p plays on with its sleep
-// timer put back, and the error says why, with that of a hand-over that
+// --background: it pauses p on the sample reached and lets go of the sound
+// card, saves the queue and what goes with it, the sleep timer as it was, and
+// waits up to wait for the player to play. Paused, p would still hold the card,
+// and one that takes one program at a time, as a USB DAC's may, would turn the
+// player away. When that fails the hand-over is undone, p plays on with its
+// sleep timer put back, and the error says why, with that of a hand-over that
 // couldn't be cleared. save must be the queue's only writer while HandOver
 // runs.
 func HandOver(p Source, save func(player.Snapshot) error, handover func(resume.Handover) error,
@@ -37,6 +40,7 @@ func HandOver(p Source, save func(player.Snapshot) error, handover func(resume.H
 	if p.State().Playing {
 		p.Toggle() // the first only ended the sleep timer's fade
 	}
+	p.Release()
 	undo := func(err error) error {
 		herr := handover(resume.Handover{})
 		if !p.State().Playing {

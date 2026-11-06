@@ -155,6 +155,10 @@ func New(out audio.Output, open Opener, log *slog.Logger) *Player {
 	return p
 }
 
+// Release pauses and lets go of the sound card, returning once it has, so that
+// the background player can open it. Toggle plays on and opens it again.
+func (p *Player) Release() { p.engine.Release() }
+
 // Close stops playback, waits for priming to finish and releases the output.
 func (p *Player) Close() error {
 	p.mu.Lock()
