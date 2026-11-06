@@ -61,6 +61,32 @@ func TestParsePath(t *testing.T) {
 		{"Odalys/Copper Season/1-12. Rust.mp3", "Odalys", "Copper Season", "Rust", 1, 12},
 		{"Odalys/Copper Season/CD2/03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
 		{"Odalys/Copper Season/Disc 1/01 Ember.mp3", "Odalys", "Copper Season", "Ember", 1, 1},
+		{"Odalys/Copper Season/Disc 1 - Embers/01 Ember.mp3", "Odalys", "Copper Season", "Ember", 1, 1},
+		{"Odalys/Copper Season/CD2 (Bonus)/03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
+		{"Odalys/Copper Season/Disc 2 of 2/03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
+		{"Odalys/Copper Season/[Disc 2]/03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
+		{"Odalys/Copper Season/Disc.2/03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
+		{"Odalys/Copper Season/CD_2/03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
+		{"Odalys/Copper Season (Disc 2)/03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
+		{"Odalys/Copper Season [CD2]/03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
+		{"Odalys/Copper Season - Disc 2/03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
+		{"Odalys/Copper Season/Disc 1, Embers/01 Ember.mp3", "Odalys", "Copper Season", "Ember", 1, 1},
+		{"Odalys/Copper Season/Disc 1 - Embers/01 Ember.mp3", "Odalys", "Copper Season", "Ember", 1, 1},
+		{"Odalys/Copper Season　(Disc 2)/03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
+		// The disc the folders give beats a file name's, as a ripper names
+		// every disc of a set tagged 1/1 "1-03".
+		{"Odalys/Copper Season CD2/1-03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
+		{"Odalys/Copper Season/CD2/1-03 Rust.flac", "Odalys", "Copper Season", "Rust", 2, 3},
+		// Not discs: a name that goes on after the number with only a space, or
+		// after a dot ("Disc 2.0"); a CD numbered as one of a collection; a disc
+		// without a number; a word that starts like one; a year.
+		{"Odalys/CD 1 Classics/01 Ember.mp3", "Odalys", "CD 1 Classics", "Ember", 0, 1},
+		{"Odalys/Disc 2.0 Remixes/01 Ember.mp3", "Odalys", "Disc 2.0 Remixes", "Ember", 0, 1},
+		{"Odalys/CD1.5/01 Ember.mp3", "Odalys", "CD1.5", "Ember", 0, 1},
+		{"Odalys/CD 01 - Abbey Road/01 Ember.mp3", "Odalys", "CD 01 - Abbey Road", "Ember", 0, 1},
+		{"Odalys/Copper Season (Bonus Disc)/01 Ember.mp3", "Odalys", "Copper Season (Bonus Disc)", "Ember", 0, 1},
+		{"Odalys/Discovery/01 Ember.mp3", "Odalys", "Discovery", "Ember", 0, 1},
+		{"Odalys/Hits CD 2001/01 Ember.mp3", "Odalys", "Hits CD 2001", "Ember", 0, 1},
 		{"Boombrick/Kenji Arata/Afterhours/02 Neon.flac", "Kenji Arata", "Afterhours", "Neon", 0, 2},
 		{"Copper Season/Rust.mp3", "Unknown artist", "Copper Season", "Rust", 0, 0},
 		{"Rust.mp3", "Unknown artist", "Unknown album", "Rust", 0, 0},
@@ -334,6 +360,131 @@ func TestTagsKeepFolderDisc(t *testing.T) {
 	}
 }
 
+// oneAlbum scans root and returns its only album's title and tracks as
+// "disc-number title".
+func oneAlbum(t *testing.T, db *sql.DB, root string) (string, string) {
+	t.Helper()
+	if _, err := Scan(context.Background(), db, root, formats); err != nil {
+		t.Fatal(err)
+	}
+	albums, err := Albums(db)
+	if err != nil || len(albums) != 1 {
+		t.Fatalf("albums = %+v, %v; want one", albums, err)
+	}
+	var got []string
+	for _, tr := range albums[0].Tracks {
+		got = append(got, fmt.Sprintf("%d-%d %s", tr.Disc, tr.Number, tr.Title))
+	}
+	return albums[0].Title, strings.Join(got, ",")
+}
+
+// An album tag that names the disc, as "Copper Season (Disc 1)", is the album
+// without it, and gives the disc when no disc is tagged.
+func TestDiscInAlbumTag(t *testing.T) {
+	db, root := openDB(t), t.TempDir()
+	tags := func(album, track, title string) string {
+		return id3(map[string]string{"TALB": album, "TPE2": "Odalys", "TRCK": track, "TIT2": title})
+	}
+	touch(t, root, "Odalys/Copper Season/x.mp3", tags("Copper Season [CD2]", "1", "Rust"))
+	touch(t, root, "Odalys/Copper Season/y.mp3", tags("Copper Season (Disc 1)", "2", "Ember"))
+	touch(t, root, "Odalys/Copper Season/z.mp3", tags("Copper Season (Disc 1)", "1", "Ash"))
+	title, tracks := oneAlbum(t, db, root)
+	if title != "Copper Season" || tracks != "1-1 Ash,1-2 Ember,2-1 Rust" {
+		t.Fatalf("album %q: %s", title, tracks)
+	}
+}
+
+// The disc an album's name or a disc folder gives beats a disc tag: rippers
+// tag every disc of a set 1/1.
+func TestNamedDiscBeatsDiscTag(t *testing.T) {
+	for _, c := range []struct{ name, disc1, disc2, album1, album2 string }{
+		{"album tags", "Odalys/Copper Season/x.mp3", "Odalys/Copper Season/y.mp3",
+			"Copper Season (Disc 1)", "Copper Season (Disc 2)"},
+		{"disc folders", "Odalys/Copper Season/CD1/x.mp3", "Odalys/Copper Season/CD2/y.mp3",
+			"Copper Season", "Copper Season"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			db, root := openDB(t), t.TempDir()
+			tags := func(album, title string) string {
+				return id3(map[string]string{"TALB": album, "TPE2": "Odalys", "TPOS": "1/1", "TRCK": "1", "TIT2": title})
+			}
+			touch(t, root, c.disc2, tags(c.album2, "Rust"))
+			touch(t, root, c.disc1, tags(c.album1, "Ash"))
+			title, tracks := oneAlbum(t, db, root)
+			if title != "Copper Season" || tracks != "1-1 Ash,2-1 Rust" {
+				t.Fatalf("album %q: %s", title, tracks)
+			}
+		})
+	}
+}
+
+// Sibling folders of an album's discs, "Copper Season (Disc 1)" and
+// "Copper Season (Disc 2)", are one album without an album-artist tag, even
+// when one disc has a guest.
+func TestSiblingDiscFolders(t *testing.T) {
+	db, root := openDB(t), t.TempDir()
+	touch(t, root, "Odalys/Copper Season (Disc 1)/01 Ash.mp3", "x")
+	touch(t, root, "Odalys/Copper Season (Disc 2)/01 Rust.mp3",
+		id3(map[string]string{"TPE1": "Odalys feat. Kenji Arata", "TIT2": "Rust", "TRCK": "1"}))
+	title, tracks := oneAlbum(t, db, root)
+	if title != "Copper Season" || tracks != "1-1 Ash,2-1 Rust" {
+		t.Fatalf("album %q: %s", title, tracks)
+	}
+}
+
+// A folder's album name loses its disc once: a tagged file without an album
+// tag keeps the rest of the name.
+func TestFolderAlbumSplitOnce(t *testing.T) {
+	db, root := openDB(t), t.TempDir()
+	touch(t, root, "Odalys/Hits CD1 (Disc 2)/x.mp3", id3(map[string]string{"TIT2": "Ember", "TRCK": "1"}))
+	title, tracks := oneAlbum(t, db, root)
+	if title != "Hits CD1" || tracks != "2-1 Ember" {
+		t.Fatalf("album %q: %s", title, tracks)
+	}
+}
+
+func TestSplitDisc(t *testing.T) {
+	for _, c := range []struct {
+		name, album string
+		disc        int
+	}{
+		{"Copper Season (Disc 1)", "Copper Season", 1},
+		{"Copper Season [CD 2]", "Copper Season", 2},
+		{"Copper Season (Disc 1 of 2)", "Copper Season", 1},
+		{"Copper Season - Disc 2", "Copper Season", 2},
+		{"Copper Season: Disc 3", "Copper Season", 3},
+		{"Copper Season, Disc 3", "Copper Season", 3},
+		{"Copper Season CD2", "Copper Season", 2},
+		{"Copper Season Disc.2", "Copper Season", 2},
+		{"Copper Season (Disc 1)", "Copper Season", 1},
+		{"アルバム（Disc 2）", "アルバム", 2},
+		{"アルバム　[DISC 1]", "アルバム", 1},
+		{"アルバム【CD1】", "アルバム", 1},
+		// Left as they are.
+		{"Copper Season (Bonus Disc)", "Copper Season (Bonus Disc)", 0},
+		{"Disc 2", "Disc 2", 0},
+		{"Hits CD 2001", "Hits CD 2001", 0},
+		{"Copper Season (Disc 2) [Remastered]", "Copper Season (Disc 2) [Remastered]", 0},
+		{"Copper Season (Disc 0)", "Copper Season (Disc 0)", 0},
+	} {
+		if album, disc := splitDisc(c.name); album != c.album || disc != c.disc {
+			t.Errorf("splitDisc(%q) = %q, %d; want %q, %d", c.name, album, disc, c.album, c.disc)
+		}
+	}
+}
+
+// Disc folders named with their titles keep each disc's tracks together.
+func TestDiscFoldersWithTitles(t *testing.T) {
+	db, root := openDB(t), t.TempDir()
+	touch(t, root, "Odalys/Copper Season/Disc 2 - Rust/01 Rust.flac", "x")
+	touch(t, root, "Odalys/Copper Season/Disc 1 - Embers/02 Ember.flac", "x")
+	touch(t, root, "Odalys/Copper Season/Disc 1 - Embers/01 Ash.flac", "x")
+	title, tracks := oneAlbum(t, db, root)
+	if title != "Copper Season" || tracks != "1-1 Ash,1-2 Ember,2-1 Rust" {
+		t.Fatalf("album %q: %s", title, tracks)
+	}
+}
+
 func TestPartialTagsFallBackToFolders(t *testing.T) {
 	db := openDB(t)
 	root := t.TempDir()
@@ -505,6 +656,10 @@ func TestAlbumDirSkipsDiscFolders(t *testing.T) {
 		{"/m/A/B/01.mp3", "/m/A/B"},
 		{"/m/A/B/CD2/01.mp3", "/m/A/B"},
 		{"/m/A/B/Disc 1/01.mp3", "/m/A/B"},
+		{"/m/A/B/Disc 1 - Embers/01.mp3", "/m/A/B"},
+		{"/m/A/B/[CD 2]/01.mp3", "/m/A/B"},
+		{"/m/A/CD 1 Classics/01.mp3", "/m/A/CD 1 Classics"},
+		{"/m/A/CD 01 - Abbey Road/01.mp3", "/m/A/CD 01 - Abbey Road"},
 	} {
 		if got := filepath.ToSlash(AlbumDir(filepath.FromSlash(c.path))); got != c.want {
 			t.Errorf("AlbumDir(%q) = %q, want %q", c.path, got, c.want)

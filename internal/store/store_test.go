@@ -92,8 +92,10 @@ func TestMigrationThreeKeepsTracks(t *testing.T) {
 		t.Fatalf("row = %q %q disc %d number %d year %d gain %v peak %v",
 			artist, albumArtist, disc, number, year, gain, peak)
 	}
-	if mtime != 0 {
-		t.Fatalf("mtime = %d, want 0 so the next scan re-reads the file", mtime)
+	// Migration 3 zeroes it so the next scan re-reads the file; 15 moves it on
+	// a second.
+	if mtime != 1 {
+		t.Fatalf("mtime = %d, want 1 so the next scan re-reads the file", mtime)
 	}
 	for _, table := range []string{"queue", "playback_state", "progress"} {
 		if _, err := s.DB.Exec(`SELECT 1 FROM ` + table); err != nil {
@@ -129,10 +131,44 @@ func TestGenresMigrationRereadsTracks(t *testing.T) {
 	if err := s.DB.QueryRow(`SELECT genres, size, mtime FROM tracks`).Scan(&genres, &size, &mtime); err != nil {
 		t.Fatal(err)
 	}
-	// No file is -1 bytes, so the next scan re-reads it. The mtime stays: it
-	// orders Recent while that scan runs.
-	if genres != "" || size != -1 || mtime != 1700000000 {
-		t.Fatalf("genres %q, size %d, mtime %d; want none yet, -1 and 1700000000", genres, size, mtime)
+	// No file is -1 bytes, so the next scan re-reads it. The mtime keeps its
+	// order in Recent while that scan runs: migration 15 moves every one on
+	// a second.
+	if genres != "" || size != -1 || mtime != 1700000001 {
+		t.Fatalf("genres %q, size %d, mtime %d; want none yet, -1 and 1700000001", genres, size, mtime)
+	}
+}
+
+// Migration 15 has the next scan read every file again, for the disc numbers
+// and album names a disc folder or an album's name gives. It moves each
+// file's time on a second rather than spoiling its size, which the Downloads
+// tab adds up while the scan runs.
+func TestDiscMigrationRereadsTracks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "boombrick.db")
+	old, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range append(migrations[:14:14], `PRAGMA user_version = 14`,
+		`INSERT INTO tracks (path, size, mtime, artist, album, title, number, added)
+			VALUES ('/m/a.mp3', 10, 1700000000, 'Odalys', 'Copper Season (Disc 1)', 'Rust', 1, 5)`) {
+		if _, err := old.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var size, mtime int
+	if err := s.DB.QueryRow(`SELECT size, mtime FROM tracks`).Scan(&size, &mtime); err != nil {
+		t.Fatal(err)
+	}
+	if size != 10 || mtime != 1700000001 {
+		t.Fatalf("size %d, mtime %d; want 10 and 1700000001", size, mtime)
 	}
 }
 

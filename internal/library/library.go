@@ -232,34 +232,42 @@ func writeChanges(db *sql.DB, changes []change, gone []string, now int64) error 
 }
 
 // describe is a file's metadata: its tags where it has them, its place in the
-// folder tree otherwise.
+// folder tree otherwise. The disc its folders or its album tag name, as
+// "Copper Season (Disc 1)", beats its disc tag, as rippers tag each disc of a
+// set 1/1; the disc tag beats the file name's.
 func describe(root, path string, f Formats) Track {
-	artist, album, title, disc, number := ParsePath(root, path)
-	t := Track{Artist: artist, Album: album, Title: title, Disc: disc, Number: number}
+	p := parsePath(root, path)
+	t := Track{Artist: p.artist, Album: p.album, Title: p.title, Disc: p.nameDisc, Number: p.number}
 	t.Duration, _ = f.Duration(path) // an unreadable length stays 0
-	tags, err := ReadTags(path)
-	if err != nil {
-		return t
-	}
-	for _, s := range []struct {
-		dst *string
-		v   string
-	}{
-		{&t.Title, tags.Title}, {&t.Artist, tags.Artist}, {&t.Album, tags.Album}, {&t.AlbumArtist, tags.AlbumArtist},
-	} {
-		if s.v != "" {
-			*s.dst = s.v
+	named := p.folderDisc
+	if tags, err := ReadTags(path); err == nil {
+		album, disc := splitDisc(tags.Album)
+		if named == 0 {
+			named = disc
 		}
+		for _, s := range []struct {
+			dst *string
+			v   string
+		}{
+			{&t.Title, tags.Title}, {&t.Artist, tags.Artist}, {&t.Album, album}, {&t.AlbumArtist, tags.AlbumArtist},
+		} {
+			if s.v != "" {
+				*s.dst = s.v
+			}
+		}
+		if tags.Track > 0 {
+			t.Number = tags.Track
+		}
+		if tags.Disc > 0 {
+			t.Disc = tags.Disc
+		}
+		t.Year, t.Gain, t.Peak, t.HasGain = tags.Year, tags.Gain, tags.Peak, tags.HasGain
+		t.AlbumGain, t.AlbumPeak, t.HasAlbumGain = tags.AlbumGain, tags.AlbumPeak, tags.HasAlbumGain
+		t.SpotifyID, t.Genres = tags.SpotifyID, tags.Genres
 	}
-	if tags.Track > 0 {
-		t.Number = tags.Track
+	if named > 0 {
+		t.Disc = named
 	}
-	if tags.Disc > 0 {
-		t.Disc = tags.Disc
-	}
-	t.Year, t.Gain, t.Peak, t.HasGain = tags.Year, tags.Gain, tags.Peak, tags.HasGain
-	t.AlbumGain, t.AlbumPeak, t.HasAlbumGain = tags.AlbumGain, tags.AlbumPeak, tags.HasAlbumGain
-	t.SpotifyID, t.Genres = tags.SpotifyID, tags.Genres
 	return t
 }
 
@@ -297,8 +305,52 @@ func under(path string, dirs []string) bool {
 	return false
 }
 
-// discFolder matches folder names like "CD1", "CD 2", "Disc 2" and "disk3".
-var discFolder = regexp.MustCompile(`(?i)^(?:cd|disc|disk)\s*(\d+)$`)
+// The pieces of the disc patterns. A disc is "CD", "Disc" or "Disk" and its
+// number, perhaps after a dot, dash or underscore: "Disc 2", "CD.2", "disk_3".
+// Spaces take in the no-break and ideographic ones \s leaves out, and
+// brackets the full-width ones Japanese names use.
+const (
+	discSpace = `[\s\p{Zs}]`
+	discOpen  = `[\[(（［【]`
+	discClose = `[\])）］】]`
+	discDash  = `[-–—_:,：]`
+	discWord  = `(?:cd|disc|disk)`
+	discNum   = `[\s\p{Zs}._-]*(\d{1,3})`
+	discCount = `(?:` + discSpace + `+of` + discSpace + `*\d+)?`
+)
+
+// discFolder matches a disc's folder: "CD1", "CD 2", "Disc 2", "disk3", one
+// in brackets, "[Disc 1]", or with a count, "Disc 2 of 2". A CD's name may go
+// on in brackets, "CD2 (Bonus)", and a disc's after a dash, colon or comma
+// too, "Disc 1 - Embers". Names that go on otherwise are albums': "CD 1
+// Classics", "Disc 2.0 Remixes", and "CD 01 - Abbey Road", one CD of a
+// collection.
+var discFolder = regexp.MustCompile(`(?i)^` + discOpen + `?` + discSpace + `*(?:` +
+	discWord + discNum + `(?:` + discSpace + `*$|` + discSpace + `*` + discClose + `|` +
+	discSpace + `+of` + discSpace + `*\d|` + discSpace + `*` + discOpen + `)|` +
+	`(?:disc|disk)` + discNum + discSpace + `*` + discDash + `)`)
+
+// albumDisc matches an album name that ends with its disc: "Copper Season
+// (Disc 1)", "Copper Season [CD2]", "Copper Season - Disc 2", "Copper Season
+// CD2".
+var albumDisc = regexp.MustCompile(`(?i)^(.*?\S)(?:` +
+	discSpace + `*` + discDash + `?` + discSpace + `*` + discOpen + discSpace + `*` + discWord + discNum + discCount + discSpace + `*` + discClose + `|` +
+	`(?:` + discSpace + `*` + discDash + discSpace + `*|` + discSpace + `+)` + discWord + discNum + discCount +
+	`)` + discSpace + `*$`)
+
+// splitDisc takes the disc an album name ends with off it: "Copper Season
+// (Disc 2)" is "Copper Season" and 2. Any other name comes back as it is,
+// with 0.
+func splitDisc(album string) (string, int) {
+	m := albumDisc.FindStringSubmatch(album)
+	if m == nil {
+		return album, 0
+	}
+	if n, _ := strconv.Atoi(m[2] + m[3]); n > 0 {
+		return strings.TrimSpace(m[1]), n
+	}
+	return album, 0
+}
 
 // The names ParsePath gives a file with no folder to take them from. The art
 // cache doesn't search online for them.
@@ -310,34 +362,58 @@ const (
 // ParsePath derives metadata from where a file sits: Artist/Album/NN Title.ext.
 // A missing level becomes "Unknown artist" or "Unknown album"; deeper trees use
 // the two folders closest to the file. A disc folder (CD1, Disc 2) between the
-// album and the file is skipped and its number becomes the disc, unless the
-// file name gives one ("1-07 Title"). Without either, disc is 0.
+// album and the file is skipped and its number becomes the disc; so does the
+// disc an album folder's name ends with ("Copper Season (Disc 2)"), which is
+// taken off the album. Without either, the file name may give the disc
+// ("1-07 Title"). Without any, disc is 0.
 func ParsePath(root, path string) (artist, album, title string, disc, number int) {
+	p := parsePath(root, path)
+	disc = p.folderDisc
+	if disc == 0 {
+		disc = p.nameDisc
+	}
+	return p.artist, p.album, p.title, disc, p.number
+}
+
+// pathInfo is what a file's place in the folder tree says about it.
+type pathInfo struct {
+	artist, album, title string
+	number               int
+	folderDisc           int // a disc folder's, or the disc an album folder's name ends with
+	nameDisc             int // the file name's, "1-07 Title"
+}
+
+// parsePath is ParsePath with the folders' disc and the file name's apart, as
+// a disc tag comes between them.
+func parsePath(root, path string) pathInfo {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		rel = path
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	dirs, file := parts[:len(parts)-1], parts[len(parts)-1]
-	folderDisc := 0
+	var p pathInfo
 	if len(dirs) > 0 {
 		if m := discFolder.FindStringSubmatch(dirs[len(dirs)-1]); m != nil {
-			folderDisc, _ = strconv.Atoi(m[1])
+			p.folderDisc, _ = strconv.Atoi(m[1] + m[2])
 			dirs = dirs[:len(dirs)-1]
 		}
 	}
-	artist, album = UnknownArtist, UnknownAlbum
+	p.artist, p.album = UnknownArtist, UnknownAlbum
 	switch {
 	case len(dirs) >= 2:
-		artist, album = dirs[len(dirs)-2], dirs[len(dirs)-1]
+		p.artist, p.album = dirs[len(dirs)-2], dirs[len(dirs)-1]
 	case len(dirs) == 1:
-		album = dirs[0]
+		p.album = dirs[0]
 	}
-	disc, number, title = splitNumber(strings.TrimSuffix(file, filepath.Ext(file)))
-	if disc == 0 {
-		disc = folderDisc
+	if a, d := splitDisc(p.album); d > 0 {
+		p.album = a
+		if p.folderDisc == 0 {
+			p.folderDisc = d
+		}
 	}
-	return artist, album, title, disc, number
+	p.nameDisc, p.number, p.title = splitNumber(strings.TrimSuffix(file, filepath.Ext(file)))
+	return p
 }
 
 // splitNumber splits a leading track number of up to three digits from a file
@@ -400,7 +476,7 @@ func Albums(db *sql.DB) ([]Album, error) {
 		}
 		k := key{artist: t.AlbumArtist, album: t.Album}
 		if t.AlbumArtist == "" {
-			k.dir = AlbumDir(t.Path)
+			k.dir = groupDir(t.Path)
 		}
 		i, ok := index[k]
 		if !ok {
@@ -468,6 +544,16 @@ func AlbumDir(path string) string {
 		dir = filepath.Dir(dir)
 	}
 	return dir
+}
+
+// groupDir is what the tracks of an album without an album-artist tag group
+// by: its folder, less a disc the folder's name ends with, so that "Copper
+// Season (Disc 1)" and "Copper Season (Disc 2)" are one album. It names a
+// group, not a folder on the card.
+func groupDir(path string) string {
+	dir := AlbumDir(path)
+	name, _ := splitDisc(filepath.Base(dir))
+	return filepath.Join(filepath.Dir(dir), name)
 }
 
 // scanTrack reads one row of the Albums query: a track, when it was added and

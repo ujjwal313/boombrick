@@ -147,6 +147,11 @@ var migrations = []string{
 	// albums added by one scan in Recent while this one runs.
 	`ALTER TABLE tracks ADD COLUMN genres TEXT NOT NULL DEFAULT '';
 	UPDATE tracks SET size = -1`,
+	// Discs named by their folders ("Disc 1 - Embers") and by their albums'
+	// names ("Copper Season (Disc 2)"): the next scan reads every file again,
+	// as each stored time is now a second off. The sizes stay right for the
+	// Downloads tab while the scan runs, and Recent keeps its order.
+	`UPDATE tracks SET mtime = mtime + 1`,
 }
 
 func migrate(db *sql.DB) error {
