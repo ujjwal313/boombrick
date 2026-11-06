@@ -139,15 +139,21 @@ const maxContinue = 4
 func ContinueRow(progress []resume.Progress, ix *library.Index, play func(a *library.Album, track int, frame int64),
 	queue func(*library.Album)) (fixture.Row, bool) {
 	var items []fixture.Item
+	var shown []*library.Album
 	for _, pr := range progress {
 		a := ix.Album(pr.Artist, pr.Album)
 		if a == nil {
+			// Renamed since, as when a scan took "(Disc 1)" off its name.
+			a = ix.AlbumOf(pr.Path)
+		}
+		if a == nil || slices.Contains(shown, a) {
 			continue
 		}
 		track := slices.IndexFunc(a.Tracks, func(t library.Track) bool { return t.Path == pr.Path })
 		if track < 0 {
 			continue
 		}
+		shown = append(shown, a)
 		frame := pr.Frame
 		// The badge is the continued track's: an album may mix downloads with files of its own.
 		it := fixture.Item{Title: a.Title, Subtitle: a.Artist, Art: screens.AlbumArt(a),

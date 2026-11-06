@@ -498,6 +498,27 @@ func TestContinueRow(t *testing.T) {
 	}
 }
 
+// An album renamed since it was played, as when a rescan takes "(Disc 1)" off
+// its name, is found by its file, and shows once however many names it was
+// played under: as most recently played.
+func TestContinueRowFindsARenamedAlbum(t *testing.T) {
+	ix := library.NewIndex([]library.Album{
+		{Artist: "Odalys", Title: "Copper Season", Tracks: []library.Track{{Path: "/a/1"}, {Path: "/a/2"}}},
+	})
+	progress := []resume.Progress{
+		{Artist: "Odalys", Album: "Copper Season (Disc 1)", Path: "/a/2", Frame: 4800, Fraction: 0.7},
+		{Artist: "Odalys", Album: "Copper Season", Path: "/a/1", Fraction: 0.2},
+	}
+	var gotTrack int
+	row, ok := ContinueRow(progress, ix, func(a *library.Album, track int, frame int64) { gotTrack = track }, nil)
+	if !ok || len(row.Items) != 1 || row.Items[0].Progress != 0.7 || row.Items[0].Title != "Copper Season" {
+		t.Fatalf("row = %+v", row)
+	}
+	if row.Items[0].Play(); gotTrack != 1 {
+		t.Fatalf("Play resumed track %d, want 1", gotTrack)
+	}
+}
+
 func TestYQueuesTheFocusedItem(t *testing.T) {
 	queued := 0
 	rows := fixture.Home()
