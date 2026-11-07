@@ -2,6 +2,14 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.5.1]
+
+### Fixed
+
+- **YouTube Music in Europe, the UK and Switzerland:** search could show "No results" for everything. Boombrick now answers YouTube's question about cookies with each request, as yt-dlp and other YouTube Music apps do.
+- When YouTube Music answers a search in a form Boombrick can't read, Boombrick searches with yt-dlp instead, or says YouTube Music isn't answering as expected, rather than showing "No results".
+- **Spotify on a free account:** Spotify streams to Premium accounts only, so a free account's songs waited with "Spotify needs a break" and then played nothing. They are now skipped with "Spotify songs need Spotify Premium", and the rest of the queue plays.
+
 ## [v0.5.0]
 
 ### Added
