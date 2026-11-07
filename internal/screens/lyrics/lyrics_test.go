@@ -102,8 +102,7 @@ func near(a, b float32) bool { return a-b < 0.01 && b-a < 0.01 }
 
 func TestFillFollowsTheSungText(t *testing.T) {
 	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
-	r := newRow(u, "Café déjà vu") // multi-byte runes
-	rows := []row{r}
+	rows := lineRows(u, "Café déjà vu", []string{"Café déjà vu"}) // multi-byte runes
 	for _, c := range []struct {
 		sung  float64
 		runes string
@@ -121,7 +120,7 @@ func TestFillFollowsTheSungText(t *testing.T) {
 // The space a wrap drops is no part of either row, but the sung share counts it.
 func TestFillReachesTheEndOfAWrappedLine(t *testing.T) {
 	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
-	rows := []row{newRow(u, "Every station"), newRow(u, "said your name")}
+	rows := lineRows(u, "Every station said your name", []string{"Every station", "said your name"})
 	if got := fillWidth(rows, 1, 1); !near(got, rows[1].width()) {
 		t.Errorf("a finished line fills %v of %v", got, rows[1].width())
 	}
@@ -133,6 +132,47 @@ func TestFillReachesTheEndOfAWrappedLine(t *testing.T) {
 	if got := fillWidth(rows, 1, at); got != 0 {
 		t.Errorf("second row filled %v too early", got)
 	}
+}
+
+// Chinese and Japanese wrap between characters, dropping nothing: the fill
+// counts only the characters there are.
+func TestFillOfALineWrappedBetweenCharacters(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	rows := lineRows(u, "あいうえお", []string{"あいう", "えお"})
+	if got := fillWidth(rows, 0, 0.6); !near(got, rows[0].width()) {
+		t.Errorf("three of five sung: the first row filled %v of %v", got, rows[0].width())
+	}
+	if got, want := fillWidth(rows, 1, 0.8), rows[1].x[1]; !near(got, want) {
+		t.Errorf("four of five sung: the second row filled %v, want its first character's %v", got, want)
+	}
+}
+
+// A right-to-left row fills from its right end, where its first word is.
+func TestRightToLeftRowsFillFromTheRight(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	rtl := lineRows(u, "مرحبا بالعالم", []string{"مرحبا بالعالم"})[0]
+	if x0, x1 := fillSpan(rtl, 50); !near(x0, side+rtl.width()-50) || x1 != theme.ScreenW {
+		t.Errorf("right to left: fill spans %v to %v", x0, x1)
+	}
+	ltr := lineRows(u, "Low tide radio", []string{"Low tide radio"})[0]
+	if x0, x1 := fillSpan(ltr, 50); x0 != 0 || !near(x1, side+50) {
+		t.Errorf("left to right: fill spans %v to %v", x0, x1)
+	}
+}
+
+// Arabic lyrics fill from the right, as they are read.
+func TestSyncedArabicGolden(t *testing.T) {
+	src := &fakeSource{ly: lrc.Parse("[00:10.00]مرحبا بالعالم\n[00:14.00]مرحبا"), state: lrc.Found}
+	s := New(playing(11500*time.Millisecond), src, func() {}) // part way through the first line
+	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	uitest.UseFixtureFonts(t, u)
+	u.Accent = theme.Derive(fixture.PlayingHue, fixture.PlayingChroma)
+	u.Status = fixture.Status()
+	for _, at := range []time.Time{t0, t0.Add(anim.Lyric)} {
+		u.BeginFrame(at)
+		s.Draw(u)
+	}
+	uitest.Golden(t, "lyrics-synced-arabic", off.Image())
 }
 
 func TestNewLyricsReplaceTheOldWhateverTheirShape(t *testing.T) {
@@ -162,6 +202,46 @@ func lineText(s *Screen, i int) string {
 		parts = append(parts, r.text)
 	}
 	return strings.Join(parts, " ")
+}
+
+// Japanese lines, which have no spaces, wrap between characters, in the font
+// downloaded for them.
+func TestSyncedJapaneseGolden(t *testing.T) {
+	src := &fakeSource{ly: lrc.Parse("[00:10.00]東京事変の新しいアルバム\n" +
+		"[00:14.00]東京事変の新しいアルバム、東京事変の新しいアルバム、大地の音楽\n[00:18.00]新しい音楽")}
+	src.state = lrc.Found
+	s := New(playing(15*time.Second), src, func() {})
+	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	uitest.UseFixtureFonts(t, u)
+	uitest.WithCovers(u)
+	u.Accent = theme.Derive(fixture.PlayingHue, fixture.PlayingChroma)
+	u.Status = fixture.Status()
+	for _, at := range []time.Time{t0, t0.Add(anim.ArtFade + anim.Lyric)} {
+		u.BeginFrame(at)
+		s.Draw(u)
+	}
+	if rows := s.rows[1]; len(rows) < 2 {
+		t.Fatalf("the long line wrapped to %d rows", len(rows))
+	}
+	uitest.Golden(t, "lyrics-synced-japanese", off.Image())
+}
+
+// Lines wrapped before fonts arrived are wrapped again.
+func TestRowsWrappedAgainWhenFontsArrive(t *testing.T) {
+	src := &fakeSource{ly: lrc.Parse(song), state: lrc.Found}
+	s := New(playing(19200*time.Millisecond), src, func() {})
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.BeginFrame(t0)
+	s.Draw(u)
+	before := s.rows[s.line]
+	if len(before) == 0 {
+		t.Fatal("the current line wasn't wrapped")
+	}
+	u.Fonts.Refresh()
+	s.Draw(u)
+	if after := s.rows[s.line]; &after[0] == &before[0] {
+		t.Fatal("the current line wasn't wrapped again")
+	}
 }
 
 func TestPlainGolden(t *testing.T) {

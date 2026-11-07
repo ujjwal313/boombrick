@@ -75,7 +75,8 @@ type Context struct {
 	pending  bool                   // this frame left a cover fading in or waiting to be uploaded
 	tf       []transform
 	clips    []gfx.Rect
-	made     int // text and glow textures made
+	made     int    // text and glow textures made
+	gen      uint64 // the font engine's generation the texts, fits and glows were made in
 }
 
 // TextCache holds the textures of text that has been drawn, up to a budget
@@ -84,11 +85,21 @@ type Context struct {
 // as not to push everything else out of the shared one.
 type TextCache struct {
 	lru *LRU[textKey, textEntry]
+	gen uint64 // the font engine's generation its text was made in
+}
+
+// fresh empties c if its text was made before the font engine's generation
+// gen.
+func (c *TextCache) fresh(gen uint64) {
+	if c.gen != gen {
+		c.lru.Clear()
+		c.gen = gen
+	}
 }
 
 // NewTextCache returns a cache for budget bytes of textures.
 func NewTextCache(budget int) *TextCache {
-	return &TextCache{NewLRU[textKey, textEntry](budget,
+	return &TextCache{lru: NewLRU[textKey, textEntry](budget,
 		func(e textEntry) int { return e.tex.Bytes() },
 		func(e textEntry) { e.tex.Destroy() })}
 }
@@ -300,7 +311,20 @@ func (u *Context) tint(col color.NRGBA) color.NRGBA {
 	return col
 }
 
+// refresh drops the text, fits and glows made with the fonts the engine had
+// before fonts arrived: the text may draw now where it drew as missing.
+func (u *Context) refresh() {
+	if g := u.Fonts.Generation(); g != u.gen {
+		u.gen = g
+		u.texts.fresh(g)
+		clear(u.fits)
+		u.glows.Clear()
+	}
+}
+
 func (u *Context) text(c *TextCache, s string, st text.Style) (textEntry, bool) {
+	u.refresh()
+	c.fresh(u.gen)
 	k := textKey{s, st}
 	if e, ok := c.lru.Get(k); ok {
 		return e, true
@@ -348,6 +372,8 @@ func (u *Context) PrepareText(c *TextCache, s string, st text.Style) bool {
 	if s == "" {
 		return false
 	}
+	u.refresh()
+	c.fresh(u.gen)
 	if _, ok := c.lru.Get(textKey{s, st}); ok {
 		return false
 	}
@@ -361,6 +387,7 @@ func (u *Context) Made() int { return u.made }
 
 // TextWidth measures s without drawing it.
 func (u *Context) TextWidth(s string, st text.Style) float32 {
+	u.refresh()
 	if e, ok := u.texts.lru.Get(textKey{s, st}); ok {
 		return e.width
 	}
@@ -370,6 +397,7 @@ func (u *Context) TextWidth(s string, st text.Style) float32 {
 // Fit returns s shortened with an ellipsis to fit maxW. Results are cached
 // because shaping during every frame would be wasteful.
 func (u *Context) Fit(s string, st text.Style, maxW float32) string {
+	u.refresh()
 	dw := int(maxW * u.Scale)
 	k := fitKey{s, st, dw}
 	if f, ok := u.fits[k]; ok {
@@ -381,6 +409,11 @@ func (u *Context) Fit(s string, st text.Style, maxW float32) string {
 	f := u.Fonts.Fit(s, u.device(st), dw)
 	u.fits[k] = f
 	return f
+}
+
+// Wrap breaks s into lines no wider than w, as the text engine's Wrap does.
+func (u *Context) Wrap(s string, st text.Style, w float32) []string {
+	return u.Fonts.Wrap(s, u.device(st), int(w*u.Scale))
 }
 
 // LineHeight is the height of st's line box.
@@ -609,6 +642,7 @@ func (u *Context) PrepareGlow(s string, st text.Style, blur float32) bool {
 	if s == "" {
 		return false
 	}
+	u.refresh()
 	if _, ok := u.glows.Get(glowKey{s, st, u.glowRadius(blur)}); ok {
 		return false
 	}
@@ -624,6 +658,7 @@ func (u *Context) glowRadius(blur float32) int { return max(int(blur*u.Scale/2+0
 // glow returns the glow of s blurred by blur design pixels, making it the first
 // time.
 func (u *Context) glow(s string, st text.Style, blur float32) (glowEntry, bool) {
+	u.refresh()
 	r := u.glowRadius(blur)
 	k := glowKey{s, st, r}
 	e, ok := u.glows.Get(k)

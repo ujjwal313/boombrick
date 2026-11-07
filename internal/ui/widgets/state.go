@@ -1,8 +1,6 @@
 package widgets
 
 import (
-	"strings"
-
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/gfx"
@@ -19,28 +17,9 @@ var (
 // stateWidth is how wide a state's description runs before wrapping.
 const stateWidth = 600
 
-// Wrap breaks s at spaces into lines no wider than w; a single word wider
-// than w gets a line of its own.
-func Wrap(u *ui.Context, s string, st text.Style, w float32) []string {
-	var lines []string
-	line := ""
-	for _, word := range strings.Fields(s) {
-		next := word
-		if line != "" {
-			next = line + " " + word
-		}
-		if line != "" && u.TextWidth(next, st) > w {
-			lines = append(lines, line)
-			line = word
-			continue
-		}
-		line = next
-	}
-	if line != "" {
-		lines = append(lines, line)
-	}
-	return lines
-}
+// Wrap breaks s into lines no wider than w, at spaces and between Chinese or
+// Japanese characters; a single word wider than w gets a line of its own.
+func Wrap(u *ui.Context, s string, st text.Style, w float32) []string { return u.Wrap(s, st, w) }
 
 // Wrapped keeps the lines of the last text wrapped, so a screen that shows
 // the same text frame after frame wraps it once.
@@ -49,15 +28,16 @@ type Wrapped struct {
 	style text.Style
 	w     float32
 	scale float32
+	gen   uint64
 	lines []string
 }
 
-// Lines returns s wrapped to w, wrapping again only when s, st, w or the
-// context's scale changes.
+// Lines returns s wrapped to w, wrapping again only when s, st, w, the
+// context's scale or the fonts change.
 func (c *Wrapped) Lines(u *ui.Context, s string, st text.Style, w float32) []string {
 	// The zero Wrapped has no scale, so the first call always wraps.
-	if s != c.text || st != c.style || w != c.w || u.Scale != c.scale {
-		c.text, c.style, c.w, c.scale = s, st, w, u.Scale
+	if s != c.text || st != c.style || w != c.w || u.Scale != c.scale || u.Fonts.Generation() != c.gen {
+		c.text, c.style, c.w, c.scale, c.gen = s, st, w, u.Scale, u.Fonts.Generation()
 		c.lines = Wrap(u, s, st, w)
 	}
 	return c.lines

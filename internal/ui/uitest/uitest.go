@@ -53,6 +53,44 @@ func NewContext(t *testing.T, w, h int) (*ui.Context, *gfx.Offscreen) {
 	return u, off
 }
 
+// fixtureFonts are the fonts make fixtures cuts into
+// internal/ui/text/testdata/fonts, as the catalog would list them.
+var fixtureFonts = []struct {
+	name, group string
+	weight      text.Weight
+	han         text.Han
+}{
+	{"sc.ttf", "sc", text.Regular, text.Simplified},
+	{"jp.ttf", "jp", text.Regular, text.Japanese},
+	{"tc.ttf", "tc", text.Regular, text.Traditional},
+	{"kr.ttf", "kr", text.Regular, text.NoHan},
+	{"arabic.ttf", "arabic", text.Regular, text.NoHan},
+	{"arabic-semibold.ttf", "arabic", text.SemiBold, text.NoHan},
+	{"devanagari.ttf", "devanagari", text.Regular, text.NoHan},
+	{"emoji.ttf", "emoji", text.Regular, text.NoHan},
+}
+
+// UseFixtureFonts gives u's engine the fixture fonts to draw other scripts
+// and emoji with, all on the card. The test skips when they are missing.
+func UseFixtureFonts(t *testing.T, u *ui.Context) {
+	t.Helper()
+	_, file, _, _ := runtime.Caller(0)
+	dir := filepath.Join(filepath.Dir(file), "..", "text", "testdata", "fonts")
+	var list []text.Download
+	for _, f := range fixtureFonts {
+		data, err := os.ReadFile(filepath.Join(dir, f.name))
+		if err != nil {
+			t.Skipf("%s is missing; run make fixtures", f.name)
+		}
+		d, err := text.NewDownload(f.name, f.group, f.weight, f.han, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		list = append(list, d)
+	}
+	u.Fonts.UseDownloads(text.Dir(dir), list)
+}
+
 // Golden compares got with testdata/<name>.png. If more than 0.5 % of pixels
 // differ by more than 2 in any channel, the test fails and the frame is
 // written to testdata/<name>.actual.png for inspection.

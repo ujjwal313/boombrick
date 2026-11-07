@@ -198,6 +198,32 @@ func TestPreparedTextIsNotMadeAgain(t *testing.T) {
 	}
 }
 
+// When fonts arrive, text, fits and glows made before are made again, in the
+// shared cache and in a screen's own.
+func TestTextMadeAgainWhenFontsArrive(t *testing.T) {
+	u, _ := newContext(t, 1.25)
+	c := NewTextCache(1 << 20)
+	draw := func() {
+		u.Text("Carry me home", text.Body, 10, 10, theme.Paper)
+		u.TextIn(c, "Carry me home", text.Body, 10, 10, theme.Paper)
+		u.TextGlow("Carry me home", text.Body, 10, 10, 30, theme.Paper)
+		u.Fit("Paper Lanterns — The Hollow Pines", text.Body, 120)
+	}
+	draw()
+	made := u.Made()
+	if draw(); u.Made() != made {
+		t.Fatal("made again before fonts arrived")
+	}
+	u.Fonts.Refresh()
+	u.Fit("Low tide radio — Carry me home", text.Body, 120)
+	if len(u.fits) != 1 {
+		t.Fatalf("%d fits kept from before", len(u.fits)-1)
+	}
+	if draw(); u.Made() != made+3 {
+		t.Fatalf("%d textures made again, want the text twice and its glow", u.Made()-made)
+	}
+}
+
 func TestImageDrawsWhatWasPut(t *testing.T) {
 	u, off := newContext(t, 1)
 	img := image.NewNRGBA(image.Rect(0, 0, 8, 8))

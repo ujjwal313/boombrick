@@ -151,6 +151,40 @@ func TestListSheet(t *testing.T) {
 	uitest.Golden(t, "list-sheet", off.Image())
 }
 
+// TestListSheetScripts renders list rows in other scripts and with emoji, in
+// the fonts downloaded for them.
+func TestListSheetScripts(t *testing.T) {
+	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	uitest.UseFixtureFonts(t, u)
+	u.Accent = theme.Derive(35, 0.12)
+	DrawBackground(u, StateGround)
+	art := SpecFor("東京事変")
+	rows := []Row{
+		{Art: &art, Title: "東京事変の新しいアルバム", Subtitle: "東京事変 · 音楽", Duration: "3:42"},
+		{Art: &art, Title: "مرحبا بالعالم", Subtitle: "Odalys · مرحبا", Duration: "4:05"},
+		{Art: &art, Title: "हिन्दी गाना", Subtitle: "Odalys · हिन्दी", Duration: "2:58"},
+		{Art: &art, Title: "Love ❤️ 🇯🇵", Subtitle: "Odalys · 👨‍👩‍👧", Duration: "3:10"},
+		{Art: &art, Title: "东京音乐 · 한국어노래", Subtitle: "大地 · 東京音樂", Duration: "3:33"},
+	}
+	for i, r := range rows {
+		box := gfx.Rect{X: 32, Y: 20 + float32(i)*RowHeight, W: theme.ScreenW - 64, H: RowHeight}
+		ListRow(u, r, box, 0)
+	}
+	uitest.Golden(t, "list-sheet-scripts", off.Image())
+}
+
+// Text wrapped before fonts arrived is wrapped again.
+func TestWrappedWrapsAgainWhenFontsArrive(t *testing.T) {
+	u, _ := uitest.NewContext(t, 64, 64)
+	const s = "one two three four five six seven"
+	var c Wrapped
+	first := c.Lines(u, s, text.Body, 120)
+	u.Fonts.Refresh()
+	if again := c.Lines(u, s, text.Body, 120); &again[0] == &first[0] {
+		t.Fatal("not wrapped again")
+	}
+}
+
 func TestEmptyState(t *testing.T) {
 	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
 	DrawBackground(u, StateGround)
@@ -334,6 +368,23 @@ func TestArtWithoutACoverIsThePlaceholder(t *testing.T) {
 	Art(u2, coverSpec("Copper Season"), 100, CardRadius, box)
 	if !bytes.Equal(off2.Image().Pix, want.Pix) {
 		t.Fatal("an album without art doesn't look like the placeholder")
+	}
+}
+
+// A placeholder's letter is drawn again once fonts arrive, so one drawn as a
+// box before its font came doesn't stay a box. Placeholders without a letter
+// keep their image.
+func TestPlaceholderLetterDrawnAgainWhenFontsArrive(t *testing.T) {
+	u, _ := uitest.NewContext(t, 200, 200)
+	letter := ArtSpec{Hue: 30, Variant: 2, Glyph: "東"}
+	plain := ArtSpec{Hue: 30, Variant: 1, Glyph: "東"}
+	l, p := placeholderImageKey(u, letter, 100, 8), placeholderImageKey(u, plain, 100, 8)
+	u.Fonts.Refresh()
+	if placeholderImageKey(u, letter, 100, 8) == l {
+		t.Fatal("the letter's image is kept after fonts arrived")
+	}
+	if placeholderImageKey(u, plain, 100, 8) != p {
+		t.Fatal("a placeholder without a letter is drawn again when fonts arrive")
 	}
 }
 
