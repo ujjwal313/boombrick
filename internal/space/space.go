@@ -14,7 +14,7 @@ import (
 
 // Sizes is what the Storage page lists, in bytes.
 type Sizes struct {
-	Art, Lyrics, Parts, Downloader int64
+	Art, Lyrics, Fonts, Parts, Downloader int64
 }
 
 // Cache can say how much room it takes and empty itself. *art.Cache and
@@ -36,9 +36,9 @@ func (f Funcs) Clear() (int64, error) { return f.Empty(), nil }
 
 // Options say what to measure. A nil cache counts as empty.
 type Options struct {
-	Art, Lyrics, Parts Cache
-	Downloader         string // yt-dlp's folder: measured, never cleared
-	Log                *slog.Logger
+	Art, Lyrics, Fonts, Parts Cache
+	Downloader                string // yt-dlp's folder: measured, never cleared
+	Log                       *slog.Logger
 }
 
 // Meter measures and clears on its own goroutine.
@@ -71,8 +71,9 @@ func New(opts Options) *Meter {
 // Measure asks for the sizes again.
 func (m *Meter) Measure() { m.ask(func() { m.measure = true }) }
 
-// Clear empties the art cache, the fetched lyrics and the leftover partial
-// files, then measures again. Cleared then reports what it freed.
+// Clear empties the art cache, the fetched lyrics, the downloaded fonts and
+// the leftover partial files, then measures again. Cleared then reports what
+// it freed.
 func (m *Meter) Clear() { m.ask(func() { m.clear, m.measure = true, true }) }
 
 func (m *Meter) ask(f func()) {
@@ -159,6 +160,7 @@ func (m *Meter) sizesNow() Sizes {
 	var s Sizes
 	s.Art = m.size("art", m.opts.Art)
 	s.Lyrics = m.size("lyrics", m.opts.Lyrics)
+	s.Fonts = m.size("fonts", m.opts.Fonts)
 	s.Parts = m.size("partial downloads", m.opts.Parts)
 	if m.opts.Downloader != "" {
 		n, err := dirSize(m.opts.Downloader)
@@ -187,7 +189,7 @@ func (m *Meter) empty() int64 {
 	for _, c := range []struct {
 		what string
 		c    Cache
-	}{{"art", m.opts.Art}, {"lyrics", m.opts.Lyrics}, {"partial downloads", m.opts.Parts}} {
+	}{{"art", m.opts.Art}, {"lyrics", m.opts.Lyrics}, {"fonts", m.opts.Fonts}, {"partial downloads", m.opts.Parts}} {
 		if c.c == nil {
 			continue
 		}

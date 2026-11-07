@@ -227,8 +227,12 @@ func TestStoragePage(t *testing.T) {
 	if e.s.storage.shown[0] != "Measuring…" {
 		t.Fatalf("sizes before they are measured: %q", e.s.storage.shown)
 	}
-	e.space.sizes, e.space.measured = space.Sizes{Art: 42 << 20, Lyrics: 1200 << 10, Parts: 18 << 20, Downloader: 92 << 20}, true
+	e.space.sizes, e.space.measured = space.Sizes{Art: 42 << 20, Lyrics: 1200 << 10, Fonts: 1600 << 10, Parts: 18 << 20,
+		Downloader: 92 << 20}, true
 	uitest.Golden(t, "settings-storage", render(t, e, t0))
+	if fonts := e.s.storage.shown[2]; fonts != "1.6 MB" {
+		t.Fatalf("the Fonts row says %q", fonts)
+	}
 
 	e.s.Handle(press(input.A), t0)
 	if e.s.storage.dialog == nil || !e.s.Claims(input.Menu) {
