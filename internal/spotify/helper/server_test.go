@@ -141,6 +141,7 @@ func TestErrorsBecomeStatuses(t *testing.T) {
 	}{
 		{spotify.ErrSignedOut, http.StatusUnauthorized, ""},
 		{spotify.ErrUnavailable, http.StatusForbidden, ""},
+		{spotify.ErrPremium, http.StatusPaymentRequired, ""},
 		{&spotify.Throttled{Wait: spotify.KeyWait}, http.StatusTooManyRequests, "40"},
 		{spotify.ErrOffline, http.StatusServiceUnavailable, ""},
 	} {

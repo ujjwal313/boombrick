@@ -1,10 +1,12 @@
 package helper
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"github.com/devgianlu/go-librespot/audio"
 	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
 	playlist4pb "github.com/devgianlu/go-librespot/proto/spotify/playlist4"
+	"github.com/devgianlu/go-librespot/session"
 	"github.com/devgianlu/go-librespot/spclient"
 	"google.golang.org/protobuf/proto"
 
@@ -88,6 +91,37 @@ func TestProductType(t *testing.T) {
 		if got := productType([]byte(c.info)); got != c.want {
 			t.Errorf("productType(%q) = %q, want %q", c.info, got, c.want)
 		}
+	}
+}
+
+// Spotify refuses a free account the keys streams need. A refused key on any
+// other account, Premium or not yet heard of, asks for a wait.
+func TestARefusedKeyOnAFreeAccountNeedsPremium(t *testing.T) {
+	key := fmt.Errorf("audio key: %w", &audio.KeyProviderError{Code: 1})
+	var th *spotify.Throttled
+	if err := refused(key, true); !errors.Is(err, spotify.ErrPremium) || errors.As(err, &th) {
+		t.Fatalf("free: %v", err)
+	}
+	if err := refused(key, false); !errors.As(err, &th) || th.Wait != spotify.KeyWait {
+		t.Fatalf("Premium or not yet known: %v", err)
+	}
+	if err := refused(librespot.ErrMediaRestricted, true); !errors.Is(err, spotify.ErrUnavailable) {
+		t.Fatalf("a restricted track on a free account: %v", err)
+	}
+}
+
+// Once the access point has said the account is free, its streams are refused
+// at once, without asking Spotify for keys it won't give; what another
+// session's account is says nothing about this one's.
+func TestAFreeAccountsStreamsAreRefusedAtOnce(t *testing.T) {
+	sess := &session.Session{} // never reached: asking it anything would panic
+	s := &Librespot{log: slog.New(slog.DiscardHandler), busy: map[string]*stream{}, sess: sess, st: spotify.Ready, free: true}
+	if _, err := s.Stream(context.Background(), "4uLU6hMCjMI75M1A2tKUQC", 0, 160, false); !errors.Is(err, spotify.ErrPremium) {
+		t.Fatalf("free: %v", err)
+	}
+	s.sess = &session.Session{} // signed in again meanwhile
+	if s.freeOn(sess) {
+		t.Fatal("the old session was judged by the new one's account")
 	}
 }
 

@@ -18,6 +18,7 @@ func TestNoticeTexts(t *testing.T) {
 		{player.Notice{Kind: player.Offline}, "Skipped a Spotify song while offline"},
 		{player.Notice{Kind: player.Failed}, "Skipped a Spotify song that couldn’t play"},
 		{player.Notice{Kind: player.SignedOut}, "Spotify session expired"},
+		{player.Notice{Kind: player.NeedsPremium}, "Spotify songs need Spotify Premium"},
 	} {
 		if got := noticeText(c.n); got != c.want {
 			t.Errorf("%+v: %q, want %q", c.n, got, c.want)

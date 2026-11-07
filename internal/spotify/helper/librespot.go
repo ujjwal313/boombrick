@@ -72,6 +72,7 @@ type Librespot struct {
 	st       spotify.State
 	login    *spotify.Login
 	premium  bool
+	free     bool // as premium, only once the access point has said so
 	country  string
 	name     string            // the account's display name, once looked up
 	names    map[string]string // display names by user ID
@@ -237,7 +238,7 @@ func (s *Librespot) Logout() error {
 	}
 	s.attempt++
 	s.dropLocked()
-	s.login, s.premium, s.name = nil, false, ""
+	s.login, s.premium, s.free, s.name = nil, false, false, ""
 	s.state.Credentials.Username, s.state.Credentials.Data = "", nil
 	s.setLocked(spotify.SignedOut)
 	return s.store.Save(s.state)
@@ -390,11 +391,14 @@ func (s *Librespot) Stream(ctx context.Context, id string, ms int64, kbps int, l
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", spotify.ErrUnavailable, err)
 	}
+	if s.freeOn(sess) {
+		return nil, spotify.ErrPremium // not worth asking for a key
+	}
 	s.log.Info("open stream", "id", id, "kbps", kbps)
 	o, err := s.open(ctx, sess, *sid, kbps, level, ms)
 	if err != nil {
 		s.log.Warn("open stream", "id", id, "err", err)
-		return nil, classify(err)
+		return nil, refused(err, s.freeOn(sess))
 	}
 	return s.adopt(key, o, o.duration, sess), nil
 }
@@ -462,7 +466,7 @@ func (s *Librespot) connect(n int) {
 // listens for what the access point says about the account: only packets
 // that arrive after this are heard.
 func (s *Librespot) attachLocked(sess *session.Session) {
-	s.sess, s.premium, s.country = sess, false, ""
+	s.sess, s.premium, s.free, s.country = sess, false, false, ""
 	s.setLocked(spotify.Ready)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -481,7 +485,8 @@ func (s *Librespot) attachLocked(sess *session.Session) {
 			if s.sess == sess {
 				switch pkt.Type {
 				case ap.PacketTypeProductInfo:
-					s.premium = productType(pkt.Payload) == "premium"
+					typ := productType(pkt.Payload)
+					s.premium, s.free = typ == "premium", typ == "free"
 				case ap.PacketTypeCountryCode:
 					s.country = string(pkt.Payload)
 				}
@@ -666,6 +671,25 @@ func (s *Librespot) expire() {
 	if len(left) > 0 {
 		s.keepTick = time.AfterFunc(time.Until(left[0].until), s.expire)
 	}
+}
+
+// freeOn reports whether the access point has said sess's account is free;
+// false once sess has been replaced.
+func (s *Librespot) freeOn(sess *session.Session) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sess == sess && s.free
+}
+
+// refused is why a stream didn't open, on a free account if free is set. A
+// refused key asks for a wait, except on a free account: Spotify gives keys to
+// Premium alone, so waiting would never end.
+func refused(err error, free bool) error {
+	var key *audio.KeyProviderError
+	if free && errors.As(err, &key) {
+		return fmt.Errorf("%w: %w", spotify.ErrPremium, err)
+	}
+	return classify(err)
 }
 
 // classify turns go-librespot's errors into the helper's.

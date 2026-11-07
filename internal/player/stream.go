@@ -39,6 +39,9 @@ const (
 	// SignedOut: a streamed track was skipped, the Spotify session having
 	// ended.
 	SignedOut
+	// NeedsPremium: a streamed track was skipped, Spotify streaming to
+	// Premium accounts alone.
+	NeedsPremium
 )
 
 const (
@@ -140,6 +143,8 @@ func (p *Player) refusedLocked(err error, frame int64) {
 			kind = Offline
 		case errors.Is(err, spotify.ErrSignedOut):
 			kind = SignedOut
+		case errors.Is(err, spotify.ErrPremium):
+			kind = NeedsPremium
 		}
 		p.log.Warn("skipping stream", "id", p.queue[p.order[p.pos]].SpotifyID, "err", err)
 		p.tellLocked(Notice{Kind: kind})

@@ -211,6 +211,25 @@ func TestUnavailableStreamIsSkipped(t *testing.T) {
 	}
 }
 
+// Spotify refuses a free account every stream: they are skipped, saying so,
+// without waiting to try again, and the files still play.
+func TestStreamsNeedingPremiumAreSkipped(t *testing.T) {
+	p, s, a, n := streamPlayer(t, map[string]int64{"d": long}, long)
+	s.set("b", fmt.Errorf("audio key: %w", spotify.ErrPremium))
+	s.set("c", fmt.Errorf("audio key: %w", spotify.ErrPremium))
+	p.Play(append(spotifyTracks("b", "c"), Track{Path: "d"}), 0)
+	eventually(t, "d to play", func() bool { st := p.State(); return st.Index == 2 && st.Playing })
+	if got := n.kinds(); !slices.Equal(got, []NoticeKind{NeedsPremium, NeedsPremium}) {
+		t.Fatalf("notices %v", got)
+	}
+	a.mu.Lock()
+	waits := len(a.set)
+	a.mu.Unlock()
+	if got := s.log(); !slices.Equal(got, []string{"b@0", "c@0"}) || waits != 0 {
+		t.Fatalf("opened %v, %d waits set", got, waits)
+	}
+}
+
 // Signed out, streams are skipped as when offline: the files still play.
 func TestSignedOutSkipsStreams(t *testing.T) {
 	p, s, _, n := streamPlayer(t, map[string]int64{"c": long}, long)
