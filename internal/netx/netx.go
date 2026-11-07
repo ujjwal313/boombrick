@@ -4,7 +4,6 @@
 package netx
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -112,22 +111,12 @@ func Get(ctx context.Context, c *http.Client, url string, limit int64) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	return do(c, req, limit)
+	return Do(c, req, limit)
 }
 
-// Post sends body to url as contentType and returns the response's body, as
-// Get does.
-func Post(ctx context.Context, c *http.Client, url, contentType string, body []byte, limit int64) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", contentType)
-	return do(c, req, limit)
-}
-
-// do sends req and reads the response.
-func do(c *http.Client, req *http.Request, limit int64) ([]byte, error) {
+// Do sends req, for a request Get can't make, and returns the response's body
+// as Get does.
+func Do(c *http.Client, req *http.Request, limit int64) ([]byte, error) {
 	resp, err := send(c, req)
 	if err != nil {
 		return nil, err

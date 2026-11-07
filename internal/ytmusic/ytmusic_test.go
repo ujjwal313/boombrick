@@ -291,10 +291,15 @@ func TestUnknownShapes(t *testing.T) {
 		body string
 		f    Filter
 	}{
-		"no tabs":          {`{"contents":{"tabbedSearchResultsRenderer":{"tabs":[]}}}`, All},
-		"renamed sections": {searchPage(`{"musicNewShelfRenderer":{"contents":[]}}`), All},
-		"renamed rows":     {searchPage(shelf(`{"musicNewListItemRenderer":{}}`, `{"musicNewListItemRenderer":{}}`)), Songs},
-		"moved video type": {searchPage(shelf(row("", "kp", "https://example.com/kp", textRuns(unknownType)))), Songs},
+		"no tabs":                  {`{"contents":{"tabbedSearchResultsRenderer":{"tabs":[]}}}`, All},
+		"renamed sections":         {searchPage(`{"musicNewShelfRenderer":{"contents":[]}}`), All},
+		"renamed rows":             {searchPage(shelf(`{"musicNewListItemRenderer":{}}`, `{"musicNewListItemRenderer":{}}`)), Songs},
+		"renamed rows, unfiltered": {searchPage(shelf(`{"musicNewListItemRenderer":{}}`, `{"musicNewListItemRenderer":{}}`)), All},
+		"moved video type":         {searchPage(shelf(row("", "kp", "https://example.com/kp", textRuns(unknownType)))), Songs},
+		"moved video type, unfiltered": {searchPage(
+			itemSection(row("", "kp", "https://example.com/kp", textRuns(unknownType))),
+			itemSection(row("", "nt", "https://example.com/nt",
+				textRuns(`{"text":"No Surprises","navigationEndpoint":{"watchEndpoint":{"videoId":"nt"}}}`)))), All},
 	}
 	for name, c := range changed {
 		if got, err := parseSearch([]byte(c.body), c.f); !errors.Is(err, ErrChanged) {
@@ -369,9 +374,10 @@ func TestClientAsksAsTheWebAppDoes(t *testing.T) {
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req request
+		// The cookie answers YouTube's question about cookies, asked in Europe.
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || r.URL.Query().Get("prettyPrint") != "false" ||
 			req.Context.Client.Name != "WEB_REMIX" || req.Context.Client.Version != "1.20261017.01.00" ||
-			req.Context.Client.Lang != "en" {
+			req.Context.Client.Lang != "en" || r.Header.Get("Cookie") != "SOCS=CAI" {
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
 		}

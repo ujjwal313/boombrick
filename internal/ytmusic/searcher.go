@@ -314,6 +314,11 @@ func (s *Searcher) fetch(ctx context.Context, q question) answer {
 		}
 		a.state = Failed
 	}
+	// The screens say "No results" for this: the log says what was asked, and
+	// whether yt-dlp answered in YouTube Music's place.
+	if a.state == Done && q.kind == searchQ && len(a.items) == 0 {
+		s.opts.Log.Info("search found nothing", "q", q.s, "filter", FilterNames[q.filter], "fallback", a.fallback)
+	}
 	return a
 }
 
