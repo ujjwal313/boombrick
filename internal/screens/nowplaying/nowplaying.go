@@ -29,6 +29,7 @@ type Player interface {
 	Prev()
 	SetShuffle(on bool)
 	CycleRepeat()
+	Seek(d time.Duration)
 }
 
 // Controls, left to right.
@@ -85,6 +86,7 @@ type NowPlaying struct {
 	lyrics    func()                                              // opens the Lyrics screen; nil: no pill
 	downloads func(videoID string) (media.DownloadState, float32) // how far a song waited on has got; nil: none
 	note      func() string                                       // why the queue waits, or ""; nil: none
+	scrub     *screens.Scrub                                      // L2 and R2
 
 	// What the frames show, made again only when it changes.
 	elapsed, length screens.ClockText
@@ -102,10 +104,14 @@ type formatKey struct {
 
 // New creates the screen with focus on play/pause.
 func New(p Player) *NowPlaying {
-	n := &NowPlaying{p: p, focus: playCtl}
+	n := &NowPlaying{p: p, focus: playCtl, scrub: screens.NewScrub(p)}
 	n.values[playCtl].Set(1)
 	return n
 }
+
+// SetHeld tells the screen whether a button is down, so that a scrub whose
+// trigger was let go elsewhere is dropped.
+func (n *NowPlaying) SetHeld(held func(input.Button) bool) { n.scrub.SetHeld(held) }
 
 // SetLyrics gives the screen its Lyrics pill and Y button, which call open.
 func (n *NowPlaying) SetLyrics(open func()) { n.lyrics, n.hintBar = open, nil }
@@ -203,9 +209,13 @@ func (n *NowPlaying) moveTo(f int, now time.Time) {
 	n.values[f].To(1, now, anim.Focus, anim.EaseOutCubic)
 }
 
-// Handle moves focus along the controls, activates them with A and changes
-// track with L1 and R1. B is handled by the app, which closes the screen.
+// Handle moves focus along the controls, activates them with A, changes
+// track with L1 and R1 and seeks with L2 and R2. B is handled by the app,
+// which closes the screen.
 func (n *NowPlaying) Handle(ev input.Event, now time.Time) bool {
+	if n.scrub.Handle(ev, now) {
+		return true
+	}
 	if ev.Kind == input.Release {
 		return false
 	}
@@ -279,9 +289,12 @@ func (n *NowPlaying) activate() {
 // bar.
 func (n *NowPlaying) Tick() time.Duration { return 250 * time.Millisecond }
 
-// Animating reports whether focus is moving. The progress bar is redrawn on
-// Tick while music plays.
+// Animating reports whether focus is moving or a trigger is down for a
+// scrub. The progress bar is redrawn on Tick while music plays.
 func (n *NowPlaying) Animating(now time.Time) bool {
+	if n.scrub.Active() {
+		return true
+	}
 	for i := range n.values {
 		if !n.values[i].Done(now) {
 			return true
@@ -292,7 +305,7 @@ func (n *NowPlaying) Animating(now time.Time) bool {
 
 // Draw renders the frame.
 func (n *NowPlaying) Draw(u *ui.Context) {
-	s := n.p.State()
+	s := n.scrub.Shown(n.p.State(), u.Now)
 	widgets.DrawBackground(u, widgets.NowPlayingGround)
 	status := u.Status
 	u.Status.NowPlaying = "" // the screen itself shows what's playing
@@ -454,6 +467,6 @@ func (n *NowPlaying) hints(s player.State) []widgets.Hint {
 	if n.lyrics != nil {
 		hints = append(hints, widgets.Hint{Key: "Y", Label: "Lyrics"})
 	}
-	n.hintBar, n.hintLabel = append(hints, widgets.Hint{Key: "L1/R1", Label: "Track"}), label
+	n.hintBar, n.hintLabel = append(hints, widgets.Hint{Key: "L1/R1", Label: "Track"}, widgets.Hint{Key: "L2/R2", Label: "Seek"}), label
 	return n.hintBar
 }

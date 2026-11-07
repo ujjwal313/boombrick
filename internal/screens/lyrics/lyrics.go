@@ -47,7 +47,6 @@ const (
 	barH      = 4
 	lineW     = theme.ScreenW - 2*side
 	glowBlur  = 30 // the current line's glow
-	seekStep  = 10 * time.Second
 )
 
 // outputDelay is how long after the player counts music played it is heard:
@@ -100,6 +99,7 @@ type Screen struct {
 	scroll anim.Value    // plain lyrics' scroll, in rows
 	texts  *ui.TextCache // the lyric lines' text
 
+	scrub          *screens.Scrub    // L2 and R2, shown in the footer
 	elapsed, total screens.ClockText // the footer's
 }
 
@@ -111,8 +111,13 @@ const askEvery = 250 * time.Millisecond
 
 // New creates the screen; back returns to Now Playing.
 func New(p Player, src Source, back func()) *Screen {
-	return &Screen{p: p, src: src, back: back, line: -1, rows: map[int][]row{}, texts: ui.NewTextCache(lineCache)}
+	return &Screen{p: p, src: src, back: back, line: -1, rows: map[int][]row{}, texts: ui.NewTextCache(lineCache),
+		scrub: screens.NewScrub(p)}
 }
+
+// SetHeld tells the screen whether a button is down, so that a scrub whose
+// trigger was let go elsewhere is dropped.
+func (s *Screen) SetHeld(held func(input.Button) bool) { s.scrub.SetHeld(held) }
 
 // row is one wrapped row of the current line, with how far along it each
 // character starts so the fill needs no shaping while the song plays.
@@ -225,9 +230,13 @@ func (s *Screen) refresh(st player.State, now time.Time) {
 	s.ly, s.state = ly, state
 }
 
-// Handle plays and pauses with A, seeks 10 s with ◀ ▶, scrolls plain lyrics
-// with ▲ ▼ and goes back with Y.
+// Handle plays and pauses with A, seeks 10 s with ◀ ▶, rewinds and
+// fast-forwards with L2 and R2, scrolls plain lyrics with ▲ ▼ and goes back
+// with Y.
 func (s *Screen) Handle(ev input.Event, now time.Time) bool {
+	if s.scrub.Handle(ev, now) {
+		return true
+	}
 	if ev.Kind == input.Release {
 		return false
 	}
@@ -247,9 +256,9 @@ func (s *Screen) Handle(ev input.Event, now time.Time) bool {
 		if !st.Queued {
 			return false
 		}
-		d := -seekStep
+		d := -screens.SeekStep
 		if ev.Button == input.Right {
-			d = seekStep
+			d = screens.SeekStep
 		}
 		s.p.Seek(max(st.Elapsed+d, 0))
 		return true
@@ -292,8 +301,11 @@ func (s *Screen) Tick() time.Duration {
 	return 250 * time.Millisecond
 }
 
-// Animating reports whether the lines are rising or scrolling.
-func (s *Screen) Animating(now time.Time) bool { return !s.slide.Done(now) || !s.scroll.Done(now) }
+// Animating reports whether the lines are rising or scrolling, or a trigger
+// is down for a scrub.
+func (s *Screen) Animating(now time.Time) bool {
+	return s.scrub.Active() || !s.slide.Done(now) || !s.scroll.Done(now)
+}
 
 // Draw renders the frame. One that makes no text while the lines are still
 // makes a piece of the next line's ahead of time.
@@ -313,7 +325,7 @@ func (s *Screen) Draw(u *ui.Context) {
 	widgets.StatusBar(u)
 	u.Status = status
 	top := s.drawHeader(u, st, art)
-	bottom := s.drawFooter(u, st)
+	bottom := s.drawFooter(u, s.scrub.Shown(st, u.Now)) // the lines keep to what is heard
 	area := gfx.Rect{X: 0, Y: top, W: theme.ScreenW, H: bottom - top}
 	switch {
 	case s.state == lrc.Found && s.ly.Synced:

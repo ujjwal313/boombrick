@@ -222,6 +222,7 @@ type App struct {
 	mapper     input.Mapper
 	pads       map[sdl.JoystickID]map[uint8]bool // those read as game controllers, with the joystick buttons their mappings use
 	repeat     *input.Repeater
+	down       [input.VolDown + 1]bool // the buttons down, by their last events
 	home       *home.Home
 	nowPlaying *nowplaying.NowPlaying
 	music      transport // the player, for the buttons heard with the screen off
@@ -250,7 +251,6 @@ type App struct {
 	dark       bool      // the screen is off: nothing is drawn and only Power is heard
 	lightOff   bool      // the backlight was turned off, to be turned on again
 	powerAt    time.Time // when Power went down, while it is held
-	menuHeld   bool      // Menu is down, for the quit chord
 	scanEnded  bool      // a scan has ended, so an empty index is the library
 	wasAnim    bool
 	// Spotify: the session-expired dialog, whether it has opened since the
@@ -418,7 +418,7 @@ func New(opts Options) (*App, error) {
 	if a.expired != nil {
 		a.shell.alert = a.expired
 	}
-	addOverlays(a.shell, a.nowPlaying, a.queue, func() bool { return a.last.Queued }, opts.Player, opts.Lyrics)
+	addOverlays(a.shell, a.nowPlaying, a.queue, func() bool { return a.last.Queued }, opts.Player, opts.Lyrics, a.held)
 	if opts.Lyrics != nil {
 		a.forward(opts.Lyrics.Ready(), &a.redraw)
 	}
@@ -490,14 +490,17 @@ func (a *App) forward(ready <-chan struct{}, flag *atomic.Bool) {
 // addOverlays puts the screens that open over the tabs on s: Now Playing on
 // Start, when queued allows, the Queue on Select and, given lyrics, the Lyrics
 // screen, which opens from Now Playing and goes back to it, having no button
-// of its own.
-func addOverlays(s *shell, np *nowplaying.NowPlaying, q screens.Screen, queued func() bool, p lyricsscreen.Player, lyrics lyricsscreen.Source) {
+// of its own. held tells Now Playing and Lyrics which buttons are down.
+func addOverlays(s *shell, np *nowplaying.NowPlaying, q screens.Screen, queued func() bool, p lyricsscreen.Player, lyrics lyricsscreen.Source,
+	held func(input.Button) bool) {
 	nowPlayingAt := s.add(overlay{button: input.Start, screen: np, can: queued})
 	s.add(overlay{button: input.Select, screen: q})
+	np.SetHeld(held)
 	if lyrics == nil {
 		return
 	}
 	ly := lyricsscreen.New(p, lyrics, func() { s.openOverlay(nowPlayingAt, time.Now()) })
+	ly.SetHeld(held)
 	lyricsAt := s.add(overlay{button: input.None, screen: ly})
 	np.SetLyrics(func() { s.openOverlay(lyricsAt, time.Now()) })
 }
@@ -959,6 +962,11 @@ func (a *App) pressed() {
 	}
 }
 
+// held reports whether b is down. Every event counts, those the screen off
+// or a hand-over keeps from the screens too: a screen whose trigger is let go
+// while another has the buttons drops its scrub.
+func (a *App) held(b input.Button) bool { return int(b) < len(a.down) && a.down[b] }
+
 func (a *App) dispatch(e input.Event) {
 	now := time.Now()
 	switch e.Kind {
@@ -967,8 +975,8 @@ func (a *App) dispatch(e input.Event) {
 	case input.Release:
 		a.repeat.Release(e.Button)
 	}
-	if e.Button == input.Menu {
-		a.menuHeld = e.Kind != input.Release
+	if int(e.Button) < len(a.down) {
+		a.down[e.Button] = e.Kind != input.Release
 	}
 	if e.Button == input.Power {
 		if !a.opts.FirmwarePower {
@@ -979,7 +987,7 @@ func (a *App) dispatch(e input.Event) {
 	if a.handing.Load() {
 		return // the music is being handed over
 	}
-	if a.opts.QuitChord && a.menuHeld && e.Button == input.Start && e.Kind == input.Press {
+	if a.opts.QuitChord && a.held(input.Menu) && e.Button == input.Start && e.Kind == input.Press {
 		a.quit = true
 		return
 	}

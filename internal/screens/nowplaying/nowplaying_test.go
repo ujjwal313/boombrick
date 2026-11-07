@@ -20,14 +20,16 @@ type fake struct {
 	st                             player.State
 	toggles, nexts, prevs, repeats int
 	shuffles                       []bool
+	seeks                          []time.Duration
 }
 
-func (f *fake) State() player.State { return f.st }
-func (f *fake) Toggle()             { f.toggles++ }
-func (f *fake) Next()               { f.nexts++ }
-func (f *fake) Prev()               { f.prevs++ }
-func (f *fake) SetShuffle(on bool)  { f.shuffles = append(f.shuffles, on) }
-func (f *fake) CycleRepeat()        { f.repeats++ }
+func (f *fake) State() player.State  { return f.st }
+func (f *fake) Toggle()              { f.toggles++ }
+func (f *fake) Next()                { f.nexts++ }
+func (f *fake) Prev()                { f.prevs++ }
+func (f *fake) SetShuffle(on bool)   { f.shuffles = append(f.shuffles, on) }
+func (f *fake) CycleRepeat()         { f.repeats++ }
+func (f *fake) Seek(d time.Duration) { f.seeks, f.st.Elapsed = append(f.seeks, d), d }
 
 var t0 = time.Unix(1000, 0)
 
@@ -102,6 +104,50 @@ func TestShouldersChangeTrack(t *testing.T) {
 	n.Handle(press(input.R1), t0)
 	if f.prevs != 1 || f.nexts != 2 {
 		t.Fatalf("prevs %d, nexts %d", f.prevs, f.nexts)
+	}
+}
+
+// L2 and R2 seek: a tap 10 s at once; held, the progress bar runs on, and
+// letting go seeks to where it got.
+func TestTriggersSeek(t *testing.T) {
+	f := playing()
+	n := New(f)
+	if !n.Handle(press(input.R2), t0) || len(f.seeks) != 1 || f.seeks[0] != 103*time.Second {
+		t.Fatalf("R2 seeked %v, want 1:43", f.seeks)
+	}
+	if !n.Animating(t0) {
+		t.Fatal("no frames asked for while R2 is down")
+	}
+	held := t0.Add(1400 * time.Millisecond) // a second's scrub: 20 s on
+	if got := n.scrub.Shown(f.st, held).Elapsed; got != 123*time.Second {
+		t.Fatalf("the progress bar shows %v while scrubbing, want 2:03", got)
+	}
+	if !n.Handle(input.Event{Button: input.R2, Kind: input.Release}, held) || len(f.seeks) != 2 || f.seeks[1] != 123*time.Second {
+		t.Fatalf("seeks %v, want 2:03 when let go", f.seeks)
+	}
+	if n.Animating(held) {
+		t.Fatal("still asking for frames once R2 is let go")
+	}
+}
+
+// R2 let go while another screen or the quick menu has the buttons drops the
+// scrub.
+func TestScrubDroppedWithR2Up(t *testing.T) {
+	f := playing()
+	n := New(f)
+	n.SetHeld(func(input.Button) bool { return false })
+	n.Handle(press(input.R2), t0)
+	if n.Animating(t0.Add(time.Second)) {
+		t.Fatal("scrubbing with R2 up")
+	}
+}
+
+func TestHintsShowSeeking(t *testing.T) {
+	f := playing()
+	n := New(f)
+	h := n.hints(f.st)
+	if last := h[len(h)-1]; last.Key != "L2/R2" || last.Label != "Seek" {
+		t.Fatalf("the last hint is %s %s, want L2/R2 Seek", last.Key, last.Label)
 	}
 }
 

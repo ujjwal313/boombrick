@@ -290,6 +290,33 @@ func TestButtons(t *testing.T) {
 	}
 }
 
+// L2 and R2 seek as on Now Playing. A scrub shows in the footer; the lines
+// stay with what is heard until R2 is let go.
+func TestTriggersSeek(t *testing.T) {
+	p := playing(93 * time.Second)
+	s := New(p, &fakeSource{state: lrc.None}, func() {})
+	if !s.Handle(press(input.R2), t0) || !slices.Equal(p.seeks, []time.Duration{103 * time.Second}) {
+		t.Fatalf("R2 seeked %v, want 1:43", p.seeks)
+	}
+	p.st.Elapsed = 103 * time.Second
+	held := t0.Add(1400 * time.Millisecond) // a second's scrub: 20 s on
+	if got := s.scrub.Shown(p.st, held).Elapsed; got != 123*time.Second {
+		t.Fatalf("the footer shows %v while scrubbing, want 2:03", got)
+	}
+	if !s.Animating(held) {
+		t.Fatal("no frames asked for while R2 is down")
+	}
+	s.Handle(input.Event{Button: input.R2, Kind: input.Release}, held)
+	if !slices.Equal(p.seeks, []time.Duration{103 * time.Second, 123 * time.Second}) {
+		t.Fatalf("seeks %v, want 2:03 when let go", p.seeks)
+	}
+	s.SetHeld(func(input.Button) bool { return false })
+	s.Handle(press(input.L2), held)
+	if s.Animating(held) {
+		t.Fatal("scrubbing with L2 up")
+	}
+}
+
 func TestTick(t *testing.T) {
 	s := New(playing(19*time.Second), &fakeSource{ly: lrc.Parse(song), state: lrc.Found}, func() {})
 	render(t, s)
