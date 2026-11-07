@@ -2,6 +2,23 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.5.0]
+
+### Added
+
+- **Every script:** titles, artists, albums and lyrics in Japanese, Chinese, Korean, Arabic, Hebrew, Thai, Hindi and the other main Indian scripts are drawn in their own letters instead of boxes, joined and right to left where the script is, and so are emoji, in one colour. Boombrick downloads a script's font the first time it shows up, in the Library after a scan, in lyrics or on screen: about 1 to 2 MB for Chinese, Japanese or Korean, about half a megabyte for emoji, and under 100 KB for each of the others. Fonts stay on the SD card; until the Brick is online that first time, the letters show as boxes. Settings' Storage page shows the fonts' size, and Clear caches removes them.
+- **Rewind and fast-forward:** on Now Playing and Lyrics, L2 and R2 jump back or ahead 10 seconds. Hold one and the time runs on, faster the longer you hold it, while the song keeps playing; let go and it carries on from there.
+
+### Changed
+
+- The first launch after updating reads every song's tags again, to find the discs of albums on more than one. On a big card this takes about as long as the first scan, and the Library works meanwhile.
+- Chinese and Japanese lyrics wrap between characters, and a title too long for its place is shortened between whole characters, never inside an emoji or a letter with its accents.
+
+### Fixed
+
+- Albums on more than one disc stay one album, in disc order. Disc folders named like `Disc 1 - Title`, `CD2 (Bonus)`, `Disc 2 of 2` or `[Disc 1]` count as discs, and so does an album name that ends with its disc, as `Album (Disc 1)`, `Album [CD2]` or `アルバム（Disc 1）`, whether it is the folder's or the album tag's. The disc these give wins over a disc tag, so discs that were each tagged as disc 1 of 1 no longer mix their tracks. Disc and track numbers tagged with a space before them, or as `DISC`, are read too.
+- The Downloads tab's storage card no longer shows a wrong, even negative, size for your music while the first scan after an update reads every song again.
+
 ## [v0.4.1]
 
 ### Fixed
