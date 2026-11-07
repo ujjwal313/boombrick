@@ -101,6 +101,9 @@ type Options struct {
 	QuitChord bool
 	// Pads is how the firmware hands over the Brick's buttons.
 	Pads input.Layout
+	// Fonts holds the fonts downloaded for other scripts and emoji, and
+	// fetches those text needs; nil draws such text as missing.
+	Fonts Fonts
 	// Version and Device are shown at the foot of Settings.
 	Version, Device string
 	// ToolReleases and Releases find yt-dlp's and Boombrick's latest
@@ -151,6 +154,13 @@ type Space interface {
 type Backlight interface {
 	Off() error
 	On() error
+}
+
+// Fonts keeps the fonts downloaded for other scripts and emoji, and fetches
+// those text asks for. *fonts.Store is one.
+type Fonts interface {
+	text.Source
+	Ready() <-chan struct{} // receives when a font has arrived
 }
 
 // Volume is what the app tells the volume watcher, which tells the app of a
@@ -228,6 +238,7 @@ type App struct {
 	redraw     atomic.Bool  // lyrics, YouTube Music's answers, Settings' meter or releases, or an import have news to draw
 	downloaded atomic.Bool  // the download queue changed since poll last looked
 	landed     atomic.Bool  // and downloads landed, to show in the library
+	fontsIn    atomic.Bool  // and fonts arrived, for text that drew as missing
 	skipped    atomic.Bool  // and a queued song was dropped, its download failed
 	spotified  atomic.Bool  // the Spotify library has news
 	handFailed atomic.Bool  // handing the music over failed, for poll to say
@@ -308,6 +319,9 @@ func New(opts Options) (*App, error) {
 		sdl.Quit()
 		return nil, err
 	}
+	if opts.Fonts != nil {
+		fonts.UseDownloads(opts.Fonts, text.Catalog)
+	}
 	u := ui.NewContext(gfx.New(r), fonts, theme.Scale)
 	// Until the first reading, which comes within a frame or so: no battery,
 	// and the Wi-Fi icon rather than the Offline warning.
@@ -358,6 +372,9 @@ func New(opts Options) (*App, error) {
 	}
 	if opts.Saved != nil {
 		a.forward(opts.Saved, &a.saves)
+	}
+	if opts.Fonts != nil {
+		a.forward(opts.Fonts.Ready(), &a.fontsIn)
 	}
 	if opts.Covers != nil || opts.Thumbs != nil {
 		c := allCovers{web: opts.Thumbs}
@@ -578,6 +595,7 @@ func (a *App) Run() error {
 // player changes that show on screen.
 func (a *App) poll() {
 	a.volumeNews(time.Now())
+	a.fontNews()
 	select {
 	case s := <-a.statuses:
 		if !a.status {
@@ -1129,6 +1147,15 @@ func wantsPrefetch(st, l player.State) bool {
 func (a *App) VolumeChanged(level int) {
 	a.volume.Store(int32(level) + 1)
 	a.wake()
+}
+
+// fontNews has text drawn again with fonts that arrived since poll last
+// looked, as it drew as missing without them.
+func (a *App) fontNews() {
+	if a.fontsIn.Swap(false) {
+		a.ui.Fonts.Refresh()
+		a.dirty = true
+	}
 }
 
 // volumeNews shows a volume change the watcher reported, unless the screen is

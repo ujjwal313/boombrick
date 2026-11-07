@@ -271,6 +271,31 @@ func describe(root, path string, f Formats) Track {
 	return t
 }
 
+// textsQuery reads the names the library shows, each once.
+const textsQuery = `SELECT title FROM tracks UNION SELECT artist FROM tracks UNION SELECT album_artist FROM tracks
+	UNION SELECT album FROM tracks UNION SELECT genres FROM tracks`
+
+// Texts is every title, artist, album and genre in the library, each once:
+// the text whose fonts are fetched after a scan.
+func Texts(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(textsQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out, rows.Err()
+}
+
 // fileOfQuery finds a track by its Spotify ID. SQLite uses the partial index
 // tracks_spotify only when the query repeats the index's condition.
 const fileOfQuery = `SELECT path FROM tracks WHERE spotify_id = ? AND spotify_id != '' LIMIT 1`

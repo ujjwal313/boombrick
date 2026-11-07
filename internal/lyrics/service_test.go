@@ -91,6 +91,24 @@ func TestLyricsBesideTheMusicComeFirst(t *testing.T) {
 	}
 }
 
+// Lyrics found are told to Found, for the fonts they need.
+func TestFoundLyricsAreTold(t *testing.T) {
+	found := make(chan Lyrics, 1)
+	s := New(Options{DB: openDB(t), Found: func(l Lyrics) { found <- l }})
+	t.Cleanup(s.Close)
+	if _, st := answer(t, s, song(t, t.TempDir(), twoLines)); st != Found {
+		t.Fatalf("state %v", st)
+	}
+	select {
+	case l := <-found:
+		if len(l.Lines) != 2 {
+			t.Fatalf("told %d lines", len(l.Lines))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("not told")
+	}
+}
+
 func TestFetchedLyricsAreKept(t *testing.T) {
 	db, dir := openDB(t), t.TempDir()
 	f := &fakeFetch{r: Result{Synced: twoLines}}

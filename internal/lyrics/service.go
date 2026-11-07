@@ -40,7 +40,11 @@ type Options struct {
 	// is called only on the service's goroutine. Nil: a streamed song goes
 	// straight to LRCLIB.
 	FileOf func(spotifyID string) (path string, ok bool)
-	Log    *slog.Logger
+	// Found hears the lyrics found for each track, on the service's
+	// goroutine, so the fonts they need are fetched before they are shown.
+	// Nil: nothing listens.
+	Found func(Lyrics)
+	Log   *slog.Logger
 
 	retry time.Duration // how long before an Offline or Failed answer is looked for again; tests shorten it
 }
@@ -237,6 +241,9 @@ func (s *Service) worker() {
 			}
 		}
 		s.mu.Unlock()
+		if a.state == Found && s.opts.Found != nil {
+			s.opts.Found(a.lyrics)
+		}
 		select {
 		case s.ready <- struct{}{}:
 		default:

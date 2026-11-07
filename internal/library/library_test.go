@@ -691,6 +691,24 @@ func TestAddIndexesOneFile(t *testing.T) {
 	}
 }
 
+// Texts lists every name the library shows, once, whatever its script.
+func TestTexts(t *testing.T) {
+	db := openDB(t)
+	changes := []change{
+		{"/m/a.flac", 1, 1, Track{Title: "東京事変の新しいアルバム", Artist: "東京事変", Album: "大地", Genres: []string{"J-Pop", "Rock"}}},
+		{"/m/b.flac", 1, 1, Track{Title: "مرحبا", Artist: "東京事変", AlbumArtist: "Odalys", Album: "大地"}},
+	}
+	if err := writeChanges(db, changes, nil, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Texts(db)
+	slices.Sort(got)
+	want := []string{"J-Pop;Rock", "Odalys", "مرحبا", "大地", "東京事変", "東京事変の新しいアルバム"}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("Texts = %q, %v; want %q", got, err, want)
+	}
+}
+
 // The library knows the files an import downloaded by their Spotify IDs.
 func TestFilesBySpotifyID(t *testing.T) {
 	db := openDB(t)
