@@ -13,6 +13,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 - **Your music:** MP3, FLAC, Opus and M4A (AAC), gapless, with ReplayGain levelling. Browse by album, artist, song or genre; the queue has shuffle and repeat and is kept between launches.
 - **Covers** from the files, folder pictures or the Cover Art Archive.
 - **Synced lyrics** from the files, `.lrc` files or LRCLIB, with the line being sung highlighted.
+- **Every script:** titles and lyrics in Japanese, Chinese, Korean, Arabic, Hebrew, Thai, Hindi and the other main Indian scripts, and emoji. Each script's font is downloaded over Wi-Fi the first time it's needed, then kept on the card.
 - **YouTube Music:** search, browse albums and artists, and download songs as tagged Opus files with covers and lyrics. A song that is still downloading plays as soon as it lands.
 - **Spotify** (Premium): sign in with a code on your phone, then play Liked Songs and your playlists, Spotify's own mixes included, in the same queue as your music. Streams play at 96, 160 or 320 kbps over Wi-Fi.
 - **Spotify import:** download your playlists' songs, or Liked Songs, from YouTube Music to keep them offline. Each song is matched by its ISRC, or its title, artist and length, and you check the doubtful ones. A Spotify song with a downloaded copy plays the copy, without Wi-Fi.
@@ -23,7 +24,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 
 ## Installing
 
-You need a TrimUI Brick or Brick Pro with NextUI, CrossMix or Knulli. Wi-Fi is used for Spotify, YouTube Music, covers, lyrics and updates; music on the card plays without it. Spotify needs a Premium account.
+You need a TrimUI Brick or Brick Pro with NextUI, CrossMix or Knulli. Wi-Fi is used for Spotify, YouTube Music, covers, lyrics, fonts and updates; music on the card plays without it. Spotify needs a Premium account.
 
 1. Download the zip for your firmware:
    - **NextUI:** `Boombrick.pak.zip` from the [latest release](https://github.com/ujjwal313/boombrick/releases/latest).
