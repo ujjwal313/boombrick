@@ -139,3 +139,29 @@ ffmpeg -loglevel error -y -i "$spot/noise-160k.ogg" -f f32le "$spot/noise-160k.f
 ls -l "$spot"
 
 ls -l "$out"
+
+# Fonts for the text engine's tests: a few characters each, cut with
+# fonttools, as scripts/fonts.sh cuts the bundled ones, from the Noto fonts the
+# downloads are made from.
+fonts="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/internal/ui/text/testdata/fonts"
+ft="$HOME/.venvs/fonttools/bin/fonttools"
+gf=https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl
+src="${FONT_SOURCES:-$(mktemp -d)}"
+mkdir -p "$fonts"
+# Each keeps ASCII, as the downloads do, but the emoji font, which is cut
+# without its space, keeping only the digits, # and * its keycaps are made of.
+font() { # family file weight axes out text [unicodes]
+	[ -f "$src/$1.ttf" ] || curl -fsSL -o "$src/$1.ttf" "$gf/$1/$2"
+	"$ft" varLib.instancer --no-recalc-timestamp "$src/$1.ttf" "wght=$3" $4 -o "$src/$1-$3.ttf"
+	"$ft" subset "$src/$1-$3.ttf" --text="$6" --unicodes="${7:-U+0020-007E}" --layout-features='*' \
+		--no-recalc-timestamp --output-file="$fonts/$5"
+}
+font notosansjp 'NotoSansJP%5Bwght%5D.ttf' 400 '' jp.ttf 'あいうアイウのしいアルバム東京事変音楽大地新、。'
+font notosanssc 'NotoSansSC%5Bwght%5D.ttf' 400 '' sc.ttf '东京音乐大地新的专辑'
+font notosanstc 'NotoSansTC%5Bwght%5D.ttf' 400 '' tc.ttf '東京音樂大地新的專輯'
+font notosanskr 'NotoSansKR%5Bwght%5D.ttf' 400 '' kr.ttf '한국어노래'
+font notosansarabic 'NotoSansArabic%5Bwdth,wght%5D.ttf' 400 wdth=100 arabic.ttf 'مرحبا بالعالم'
+font notosansarabic 'NotoSansArabic%5Bwdth,wght%5D.ttf' 600 wdth=100 arabic-semibold.ttf 'مرحبا بالعالم'
+font notosansdevanagari 'NotoSansDevanagari%5Bwdth,wght%5D.ttf' 400 wdth=100 devanagari.ttf 'हिन्दी गाना'
+font notoemoji 'NotoEmoji%5Bwght%5D.ttf' 400 '' emoji.ttf '👨‍👩‍👧❤️👍🏽🇯🇵' 'U+0023,U+002A,U+0030-0039'
+[ -n "${FONT_SOURCES:-}" ] || rm -rf "$src"

@@ -1,4 +1,5 @@
-// Package text shapes and rasterises strings with Boombrick's bundled fonts.
+// Package text shapes and rasterises strings with Boombrick's bundled fonts,
+// and the fonts it downloads for other scripts and emoji.
 package text
 
 import (
@@ -9,7 +10,6 @@ import (
 	"io"
 	"io/fs"
 	"math"
-	"strings"
 	"unicode"
 
 	"github.com/go-text/render"
@@ -17,8 +17,10 @@ import (
 	"github.com/go-text/typesetting/font"
 	"github.com/go-text/typesetting/font/opentype"
 	"github.com/go-text/typesetting/language"
+	"github.com/go-text/typesetting/segmenter"
 	"github.com/go-text/typesetting/shaping"
 	"golang.org/x/image/math/fixed"
+	"golang.org/x/text/unicode/bidi"
 
 	"github.com/ujjwal313/boombrick/internal/ui/raster"
 )
@@ -104,13 +106,25 @@ var (
 // Engine owns the parsed fonts. It is not safe for concurrent use; the UI
 // thread owns it.
 type Engine struct {
-	fonts    fs.FS
-	faces    [faceCount]*font.Face
-	fallback [fallbackCount]*font.Face // parsed the first time a line needs one
-	tried    [fallbackCount]bool
-	shaper   shaping.HarfbuzzShaper
-	bounds   map[Style]shaping.Bounds
-	spans    []span
+	fonts     fs.FS
+	faces     [faceCount]*font.Face
+	fallback  [fallbackCount]*font.Face // parsed the first time a line needs one
+	tried     [fallbackCount]bool
+	shaper    shaping.HarfbuzzShaper
+	seg       shaping.Segmenter
+	graphemes segmenter.Segmenter
+	wrapper   shaping.LineWrapper
+	bounds    map[Style]shaping.Bounds
+	spans     []span
+
+	// The fonts it downloads: the catalog's, where they are kept, those
+	// parsed, those that wouldn't parse and those asked for.
+	downloads []download
+	source    Source
+	loaded    map[string]*font.Face
+	broken    map[string]bool
+	asked     map[string]bool
+	gen       uint64
 }
 
 // NewEngine loads the bundled fonts from fonts.
@@ -159,8 +173,8 @@ func parse(fonts fs.FS, name string) (*font.Face, error) {
 // Line is a shaped line of text. Its line box is its style's, whichever
 // fonts drew it.
 type Line struct {
-	runs     []shaping.Output // one for each font, in order
-	fallback bool             // some of it is drawn by the fallback font
+	runs     []shaping.Output // one for each font, script and direction, in the order drawn
+	fallback bool             // some of it is drawn by a font other than the style's
 	Width    int              // advance in pixels
 	Ascent   int
 	Descent  int
@@ -171,11 +185,35 @@ func (l Line) Height() int { return l.Ascent + l.Descent }
 
 // Shape lays out s on one line.
 func (e *Engine) Shape(s string, st Style) Line {
+	b := e.lineBounds(st)
+	l := Line{Ascent: b.Ascent.Ceil(), Descent: (-b.Descent).Ceil()}
 	runes := []rune(s)
+	if len(runes) == 0 {
+		return l
+	}
+	runs, dir := e.shapeRuns(runes, st)
+	var advance fixed.Int26_6
+	for _, out := range runs {
+		l.fallback = l.fallback || out.Face != e.faces[st.Face]
+		advance += out.Advance
+	}
+	l.runs = visual(runs, dir)
+	l.Width = advance.Ceil()
+	return l
+}
+
+// shapeRuns shapes runes in runs of one font, script and direction, in the
+// order of the text, and returns them with the text's direction. The
+// segmenter splits the text by direction (Unicode's bidirectional algorithm)
+// and script; split chooses the fonts.
+func (e *Engine) shapeRuns(runes []rune, st Style) ([]shaping.Output, di.Direction) {
 	size := fixed.Int26_6(math.Round(float64(st.Size) * 64))
+	dir := direction(runes)
 	in := shaping.Input{
 		Text:      runes,
-		Direction: di.DirectionLTR,
+		RunEnd:    len(runes),
+		Direction: dir,
+		Face:      e.faces[st.Face],
 		// The shaper rounds its size up to a whole pixel; the output is
 		// scaled back to size below.
 		Size:     fixed.I(size.Ceil()),
@@ -185,22 +223,88 @@ func (e *Engine) Shape(s string, st Style) Line {
 	if st.Tabular {
 		in.FontFeatures = tnum
 	}
-	b := e.lineBounds(st)
-	l := Line{Ascent: b.Ascent.Ceil(), Descent: (-b.Descent).Ceil()}
-	var advance fixed.Int26_6
-	for _, sp := range e.split(runes, st.Face) {
-		in.RunStart, in.RunEnd, in.Face = sp.start, sp.end, sp.face
-		out := e.shaper.Shape(in)
-		if in.Size != size {
-			rescale(&out, float64(size)/float64(in.Size))
-			out.Size = size
+	spans := e.split(runes, st.Face)
+	var runs []shaping.Output
+	for _, seg := range e.seg.Split(in, oneFace{in.Face}) {
+		for _, sp := range spans {
+			if sp.end <= seg.RunStart || sp.start >= seg.RunEnd {
+				continue
+			}
+			run := seg
+			run.RunStart, run.RunEnd, run.Face = max(seg.RunStart, sp.start), min(seg.RunEnd, sp.end), sp.face
+			out := e.shaper.Shape(run)
+			if run.Size != size {
+				rescale(&out, float64(size)/float64(run.Size))
+				out.Size = size
+			}
+			runs = append(runs, out)
 		}
-		l.runs = append(l.runs, out)
-		l.fallback = l.fallback || sp.face != e.faces[st.Face]
-		advance += out.Advance
 	}
-	l.Width = advance.Ceil()
-	return l
+	return runs, dir
+}
+
+// oneFace has the segmenter split by direction and script only.
+type oneFace struct{ face *font.Face }
+
+func (o oneFace) ResolveFace(rune) *font.Face { return o.face }
+
+// direction is a text's: its first strong character's, or left to right when
+// it has none, as Unicode's rules P2 and P3 have it.
+func direction(runes []rune) di.Direction {
+	for _, r := range runes {
+		p, _ := bidi.LookupRune(r)
+		switch p.Class() {
+		case bidi.L:
+			return di.DirectionLTR
+		case bidi.R, bidi.AL:
+			return di.DirectionRTL
+		}
+	}
+	return di.DirectionLTR
+}
+
+// RightToLeft reports whether s is drawn right to left, as its first strong
+// character says.
+func RightToLeft(s string) bool { return direction([]rune(s)) == di.DirectionRTL }
+
+// visual puts runs, in the order of the text, in the order they are drawn,
+// as go-text's line wrapper orders a line's: a right-to-left text is drawn
+// from its end, and runs against its direction are turned round in place.
+func visual(runs []shaping.Output, dir di.Direction) []shaping.Output {
+	n := len(runs)
+	if n < 2 {
+		return runs
+	}
+	pos := make([]int, n) // where each run is drawn
+	turn := func(from, to int) {
+		for i, j := from, to-1; i < j; i, j = i+1, j-1 {
+			pos[i], pos[j] = pos[j], pos[i]
+		}
+	}
+	rtl := dir.Progression() == di.TowardTopLeft
+	start := -1
+	for i, run := range runs {
+		pos[i] = i
+		if rtl {
+			pos[i] = n - 1 - i
+		}
+		if run.Direction.Progression() == dir.Progression() {
+			if start >= 0 {
+				turn(start, i)
+				start = -1
+			}
+		} else if start < 0 {
+			start = i
+		}
+	}
+	if start >= 0 {
+		turn(start, n)
+	}
+	out := make([]shaping.Output, n)
+	for i, p := range pos {
+		out[p] = runs[i]
+	}
+	return out
 }
 
 // span is a run of runes drawn by one face.
@@ -209,13 +313,13 @@ type span struct {
 	face       *font.Face
 }
 
-// split divides runes into runs by the face that draws them: f's own, or its
-// fallback for a word with a letter f lacks, so that a word is drawn in one
-// design. Spaces and other invisible characters stay in the run they are in.
-// A word neither face draws whole is split letter by letter, each letter
-// with the marks that follow it so an accent is placed by the font that drew
-// its letter; what neither face has is left to f, which draws it as missing.
-// The spans are e's until the next call.
+// split divides runes into runs by the face that draws them: f's own, its
+// fallback, or a downloaded font, the first that draws a whole word, so that
+// a word is drawn in one design. Spaces and other invisible characters stay
+// in the run they are in. A word none draws whole is split letter by letter,
+// each letter with the marks that follow it so an accent is placed by the
+// font that drew its letter; what none has is left to f, which draws it as
+// missing. The spans are e's until the next call.
 func (e *Engine) split(runes []rune, f Face) []span {
 	own := e.faces[f]
 	e.spans = e.spans[:0]
@@ -231,11 +335,18 @@ func (e *Engine) split(runes []rune, f Face) []span {
 		return e.spans
 	}
 	fb := e.fallbackFor(f)
+	hint := hanHint(runes)
 	for i := 0; i < len(runes); {
 		if invisible(runes[i]) {
+			// It stays in the run before it, but a space goes to f where that
+			// run's font has none, as the emoji font, cut without its own,
+			// which is five times as wide as a text's.
 			face := own
 			if n := len(e.spans); n > 0 {
 				face = e.spans[n-1].face
+				if _, ok := face.NominalGlyph(runes[i]); !ok && unicode.IsSpace(runes[i]) {
+					face = own
+				}
 			}
 			add(i, i+1, face)
 			i++
@@ -251,14 +362,24 @@ func (e *Engine) split(runes []rune, f Face) []span {
 		case fb != nil && covers(fb, word):
 			add(i, j, fb)
 		default:
+			if face := e.downloaded(word, f, hint); face != nil {
+				add(i, j, face)
+				break
+			}
 			for k := i; k < j; {
 				m := k + 1
 				for m < j && joins(runes[m]) {
 					m++
 				}
 				face := own
-				if cluster := runes[k:m]; !covers(own, cluster) && fb != nil && covers(fb, cluster) {
+				switch cluster := runes[k:m]; {
+				case covers(own, cluster):
+				case fb != nil && covers(fb, cluster):
 					face = fb
+				default:
+					if d := e.downloaded(cluster, f, hint); d != nil {
+						face = d
+					}
 				}
 				add(k, m, face)
 				k = m
@@ -326,34 +447,14 @@ func (e *Engine) Metrics(st Style) (ascent, descent int) {
 	return b.Ascent.Ceil(), (-b.Descent).Ceil()
 }
 
-// Fit returns s if it fits in maxWidth, otherwise the longest prefix that fits
-// with an ellipsis appended.
-func (e *Engine) Fit(s string, st Style, maxWidth int) string {
-	if e.Shape(s, st).Width <= maxWidth {
-		return s
-	}
-	runes := []rune(s)
-	cut := func(n int) string { return strings.TrimRight(string(runes[:n]), " ") + ellipsis }
-	lo, hi := 0, len(runes)
-	for lo < hi {
-		mid := (lo + hi + 1) / 2
-		if e.Shape(cut(mid), st).Width <= maxWidth {
-			lo = mid
-		} else {
-			hi = mid - 1
-		}
-	}
-	return cut(lo)
-}
-
 // Pad is the padding Rasterize adds on each side so italic overhangs, and the
-// tallest accents of the fallback font, aren't clipped.
+// tallest marks of the other fonts, aren't clipped.
 func Pad(st Style) int { return int(st.Size)/8 + 1 }
 
 // Rasterize draws l as a white mask Pad(st) px wider than its advance on each
-// side, and as much taller at the top and bottom when the fallback font drew
-// some of it. It returns the mask and that padding; draw the mask pad.X px
-// to the left of the text position and pad.Y px above it.
+// side, and as much taller at the top and bottom when a font other than the
+// style's drew some of it. It returns the mask and that padding; draw the
+// mask pad.X px to the left of the text position and pad.Y px above it.
 func (e *Engine) Rasterize(l Line, st Style) (*image.NRGBA, image.Point) {
 	pad := image.Point{X: Pad(st)}
 	if l.fallback {
