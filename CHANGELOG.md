@@ -2,6 +2,15 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.5.2]
+
+### Fixed
+
+- **Bluetooth headphones:** with some headphones, such as AirPods and UGREEN's, nothing played, and quitting froze the Brick until it was restarted. Boombrick now makes every call to the sound card from one thread, which fixed it with AirPods.
+- When the sound card stops taking audio for 3 seconds, playback pauses instead of hanging. Press play to try again.
+- Quit and **Play in background** no longer wait on a sound card that has stopped answering. Quit closes Boombrick within 2 seconds, and Play in background says "Couldn't play in the background" and Boombrick stays open.
+- The log names the sound device Boombrick opens, and any call to the sound card that takes more than a second, to help track down sound problems.
+
 ## [v0.5.1]
 
 ### Fixed
