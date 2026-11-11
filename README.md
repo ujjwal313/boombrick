@@ -118,6 +118,10 @@ Add a section for the version to [CHANGELOG.md](CHANGELOG.md), then push a tag s
 
 A tag with a suffix, such as `v0.2.0-beta.1`, is published as a pre-release, which Settings never offers: it is for testers, who install it by hand.
 
+## Support
+
+Boombrick is free. If you'd like to help keep it going, you can [buy me a coffee](https://buymeacoffee.com/ujjwal_).
+
 ## Licence
 
 GPL-3.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
