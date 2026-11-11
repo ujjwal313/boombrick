@@ -13,7 +13,7 @@ import (
 type Source interface {
 	State() player.State
 	Toggle()
-	Release()
+	Release() error
 	Snapshot() (player.Snapshot, bool)
 	Sleep() player.Sleep
 	ResumeSleep(s player.Sleep)
@@ -40,7 +40,6 @@ func HandOver(p Source, save func(player.Snapshot) error, handover func(resume.H
 	if p.State().Playing {
 		p.Toggle() // the first only ended the sleep timer's fade
 	}
-	p.Release()
 	undo := func(err error) error {
 		herr := handover(resume.Handover{})
 		if !p.State().Playing {
@@ -50,6 +49,10 @@ func HandOver(p Source, save func(player.Snapshot) error, handover func(resume.H
 			p.ResumeSleep(sleep) // the pause ended an end-of-track or end-of-album timer
 		}
 		return errors.Join(err, herr)
+	}
+	// A card stuck in a call can't be opened by the background player either.
+	if err := p.Release(); err != nil {
+		return undo(err)
 	}
 	snap, ok := p.Snapshot()
 	if !ok {

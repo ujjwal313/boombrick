@@ -3,6 +3,7 @@ package audio
 import (
 	"errors"
 	"io"
+	"runtime"
 	"sync"
 	"time"
 
@@ -35,6 +36,14 @@ const (
 // ErrRate is reported for sources whose sample rate the engine can't play.
 var ErrRate = errors.New("audio: unsupported sample rate")
 
+// ErrStuck is reported by Release and Close when the output is stuck in a
+// call, as a write to a wedged Bluetooth device can be, and didn't let go.
+var ErrStuck = errors.New("audio: the output is stuck and didn't let go")
+
+// letGo is how long Release and Close wait for the output to be let go. The
+// device's 100 ms buffer and closing it take far less.
+const letGo = 2 * time.Second
+
 // SupportedRate reports whether the engine can play a source at rate.
 func SupportedRate(rate int) bool { return rate >= minRate && rate <= maxRate }
 
@@ -62,9 +71,11 @@ type End struct {
 // the output's own buffer absorbs scheduling hiccups. Its buffers are
 // allocated once.
 type Engine struct {
-	out   Output
-	onEnd func(End)
-	done  chan struct{}
+	out      Output
+	onEnd    func(End)
+	done     chan struct{}
+	wait     time.Duration // how long Release and Close wait for the output
+	closeErr error         // what closing the output said, once done is closed
 
 	mu       sync.Mutex
 	wake     *sync.Cond
@@ -106,7 +117,7 @@ type fadeEnd struct {
 // to its end, on a goroutine of its own, one End at a time, in the order
 // sources ended.
 func NewEngine(out Output, onEnd func(End)) *Engine {
-	e := &Engine{out: out, onEnd: onEnd, seek: -1, done: make(chan struct{}), st: Status{Frames: -1}}
+	e := &Engine{out: out, onEnd: onEnd, seek: -1, done: make(chan struct{}), wait: letGo, st: Status{Frames: -1}}
 	e.wake = sync.NewCond(&e.mu)
 	e.nwake = sync.NewCond(&e.nmu)
 	go e.loop()
@@ -224,21 +235,46 @@ func (e *Engine) Pause() { e.set(func() { e.paused, e.fadeOut = true, fadeOut{} 
 
 // Release pauses playback, as Pause does, and closes the output, returning once
 // it has: another program can then open a device that takes one at a time, as
-// a USB DAC's may. Resume opens it again, or a new source does. It returns at
-// once on a closed engine.
-func (e *Engine) Release() {
+// a USB DAC's may. Resume opens it again, or a new source does. It returns
+// ErrStuck when the output doesn't let go in time, and then no longer asks for
+// it to be closed. On a closed engine it returns at once, with ErrStuck if the
+// output never let go.
+func (e *Engine) Release() error {
 	var done chan struct{}
+	closed := false
 	e.set(func() {
+		if closed = e.closed; closed {
+			return
+		}
 		e.paused, e.fadeOut = true, fadeOut{}
 		if e.release == nil {
 			e.release = make(chan struct{})
 		}
 		done = e.release
 	})
+	if closed {
+		select {
+		case <-e.done:
+			return nil
+		default:
+			return ErrStuck
+		}
+	}
+	t := time.NewTimer(e.wait)
+	defer t.Stop()
 	select {
 	case <-done:
 	case <-e.done:
+	case <-t.C:
+		// The caller plays on here; a later pause mustn't close the output.
+		e.mu.Lock()
+		if e.release == done {
+			e.release = nil
+		}
+		e.mu.Unlock()
+		return ErrStuck
 	}
+	return nil
 }
 
 // Resume continues after Pause or Cue, after an output error paused playback,
@@ -291,14 +327,30 @@ func (e *Engine) Status() Status {
 	return st
 }
 
-// Close stops the goroutine, closes any source and closes the output.
+// Close stops the goroutine, which closes any source and the output, and
+// reports what closing the output said. When the output doesn't let go in time
+// it returns ErrStuck and leaves the goroutine to finish once the call it is
+// stuck in returns: quitting mustn't wait on a wedged device.
 func (e *Engine) Close() error {
 	e.set(func() { e.closed = true })
-	<-e.done
-	return e.out.Close()
+	t := time.NewTimer(e.wait)
+	defer t.Stop()
+	select {
+	case <-e.done:
+		return e.closeErr
+	case <-t.C:
+		return ErrStuck
+	}
 }
 
 func (e *Engine) loop() {
+	// Every call into the output, from opening it to closing it, is made from
+	// this one OS thread, which ends with the loop. bluealsa's ALSA plugin,
+	// behind Bluetooth headphones, has been seen to stop taking audio when the
+	// calls came from whichever thread Go ran the loop on: a write never
+	// returned and nothing played. Made from one thread, as a C program makes
+	// them, they went through.
+	runtime.LockOSThread()
 	defer close(e.done)
 	defer func() {
 		e.nmu.Lock()
@@ -323,6 +375,7 @@ func (e *Engine) loop() {
 			for _, s := range srcs {
 				closeSource(s)
 			}
+			e.closeErr = e.out.Close()
 			return
 		case e.switched:
 			old, cur := e.cur, e.next

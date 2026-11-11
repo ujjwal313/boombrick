@@ -24,6 +24,7 @@ type source struct {
 	playing  bool
 	released bool // the sound card is let go
 	releases int
+	stuck    error  // what Release says when the card won't let go
 	lock     string // looked at when it saves
 	saved    []player.Snapshot
 	left     []resume.Handover
@@ -42,9 +43,14 @@ func (s *source) Toggle() {
 	}
 }
 
-func (s *source) Release() {
-	s.playing, s.released = false, true
+func (s *source) Release() error {
+	s.playing = false
 	s.releases++
+	if s.stuck != nil {
+		return s.stuck
+	}
+	s.released = true
+	return nil
 }
 
 func (s *source) look() {
@@ -192,6 +198,24 @@ func TestHandOverUndoneWhenItCantBeWritten(t *testing.T) {
 		if _, held, _ := Holder(path); held {
 			t.Errorf("%s: a background player started", c.name)
 		}
+	}
+}
+
+// A sound card that won't let go, stuck in a call, undoes the hand-over before
+// any background player starts: it couldn't open the card, and the music plays
+// on here.
+func TestHandOverUndoneWhenTheCardWontLetGo(t *testing.T) {
+	path := lockPath(t)
+	s := &source{playing: true, stuck: errors.New("stuck")}
+	err := HandOver(s, s.save, s.handover, os.Args[0], childEnv("hold", path), time.Second)
+	if !errors.Is(err, s.stuck) {
+		t.Fatalf("err = %v, want %v", err, s.stuck)
+	}
+	if !s.playing || len(s.saved) != 0 {
+		t.Fatalf("playing %v, queue saved %d times", s.playing, len(s.saved))
+	}
+	if _, held, _ := Holder(path); held {
+		t.Fatal("a background player started")
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"io"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -336,6 +337,148 @@ func TestReleaseWhenPausedStoppedOrClosed(t *testing.T) {
 	case <-released:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Release waited on a closed engine")
+	}
+}
+
+// stuck is an Output whose writes don't return until it is freed, as one to
+// a wedged Bluetooth device.
+type stuck struct {
+	sink
+	entered  chan struct{} // closed by the first write
+	free     chan struct{}
+	once     sync.Once
+	freeOnce sync.Once
+}
+
+// newStuck returns a stuck output that is freed when the test ends, so a
+// failing test doesn't leave the engine waiting in a write.
+func newStuck(t *testing.T) *stuck {
+	s := &stuck{entered: make(chan struct{}), free: make(chan struct{})}
+	t.Cleanup(s.unstick)
+	return s
+}
+
+func (s *stuck) Write(buf []int16) error {
+	s.once.Do(func() { close(s.entered) })
+	<-s.free
+	return s.sink.Write(buf)
+}
+
+// unstick lets the write under way, and every one after, return.
+func (s *stuck) unstick() { s.freeOnce.Do(func() { close(s.free) }) }
+
+func (s *stuck) waitWrite(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("nothing was written")
+	}
+}
+
+// An output stuck in a write holds up neither Release nor Close: they give up
+// on it after a while, so quitting and the hand-over to the background player
+// can't hang. Once the write returns, the engine closes as before.
+func TestReleaseAndCloseDontWaitOnAStuckOutput(t *testing.T) {
+	for _, call := range []string{"Release", "Close"} {
+		out := newStuck(t)
+		e := NewEngine(out, nil)
+		e.wait = 50 * time.Millisecond
+		e.Play(&ramp{rate: OutputRate, n: 1 << 40})
+		out.waitWrite(t)
+		start := time.Now()
+		var err error
+		if call == "Release" {
+			err = e.Release()
+		} else {
+			err = e.Close()
+		}
+		if !errors.Is(err, ErrStuck) {
+			t.Fatalf("%s on a stuck output: %v, want %v", call, err, ErrStuck)
+		}
+		if took := time.Since(start); took > time.Second {
+			t.Fatalf("%s took %v on a stuck output", call, took)
+		}
+		out.unstick()
+		e.wait = 3 * time.Second
+		if err := e.Close(); err != nil {
+			t.Fatalf("Close once the write returned: %v", err)
+		}
+		if !out.isClosed() {
+			t.Fatal("the output was left open")
+		}
+	}
+}
+
+// A Release that gave up is forgotten: when the write comes back and the music
+// plays on, as after a hand-over that was undone, a later pause doesn't close
+// the output.
+func TestAReleaseThatGaveUpIsForgotten(t *testing.T) {
+	out := newStuck(t)
+	e := NewEngine(out, nil)
+	defer e.Close()
+	e.wait = 50 * time.Millisecond
+	e.Play(&ramp{rate: OutputRate, n: 1 << 40})
+	out.waitWrite(t)
+	if err := e.Release(); !errors.Is(err, ErrStuck) {
+		t.Fatalf("Release on a stuck output: %v", err)
+	}
+	e.Resume()
+	out.unstick()
+	eventually(t, "playback", func() bool { return out.written() > OutputRate/5 })
+	e.Pause()
+	eventually(t, "the pause to drop the buffer", func() bool { return out.dropCount() == 1 })
+	time.Sleep(20 * time.Millisecond)
+	if out.isClosed() {
+		t.Fatal("a pause closed the output, as the Release that gave up asked")
+	}
+}
+
+// On an engine whose Close gave up, Release returns at once, saying the output
+// is still stuck.
+func TestReleaseAfterACloseThatGaveUp(t *testing.T) {
+	out := newStuck(t)
+	e := NewEngine(out, nil)
+	e.wait = 50 * time.Millisecond
+	e.Play(&ramp{rate: OutputRate, n: 1 << 40})
+	out.waitWrite(t)
+	if err := e.Close(); !errors.Is(err, ErrStuck) {
+		t.Fatalf("Close on a stuck output: %v", err)
+	}
+	e.wait = 3 * time.Second
+	start := time.Now()
+	if err := e.Release(); !errors.Is(err, ErrStuck) {
+		t.Fatalf("Release after the Close: %v, want %v", err, ErrStuck)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("Release after the Close took %v", took)
+	}
+}
+
+// closing is an Output whose closing fails, and which counts its closes.
+type closing struct {
+	sink
+	err    error
+	closes atomic.Int32
+}
+
+func (c *closing) Close() error {
+	c.closes.Add(1)
+	c.sink.Close()
+	return c.err
+}
+
+// Close closes the output once and reports what closing it said.
+func TestCloseReportsClosingTheOutput(t *testing.T) {
+	out := &closing{err: errors.New("device gone")}
+	e := NewEngine(out, nil)
+	e.Play(&ramp{rate: OutputRate, n: 1 << 40})
+	eventually(t, "playback", func() bool { return out.written() > 0 })
+	if err := e.Close(); !errors.Is(err, out.err) {
+		t.Fatalf("Close: %v, want %v", err, out.err)
+	}
+	if n := out.closes.Load(); n != 1 {
+		t.Fatalf("the output was closed %d times", n)
 	}
 }
 
