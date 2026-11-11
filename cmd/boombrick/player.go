@@ -23,7 +23,7 @@ import (
 // helper. notify hears the player's news about streaming.
 func newPlayer(db *sql.DB, prefs *settings.Settings, sp *spotify.Helper, online func() bool, log *slog.Logger,
 	notify func(player.Notice)) *player.Player {
-	p := player.New(alsa.New(), decode.Open, log)
+	p := player.New(alsa.New(log), decode.Open, log)
 	p.SetLevelling(prefs.Bool(settings.VolumeLevelling))
 	p.SetStreaming(func(ctx context.Context, t player.Track, frame int64, level bool) (audio.Source, error) {
 		// A song an import downloaded plays from its file: no key, no Wi-Fi.
@@ -42,6 +42,14 @@ func newPlayer(db *sql.DB, prefs *settings.Settings, sp *spotify.Helper, online 
 		return s, nil
 	}, notify)
 	return p
+}
+
+// closePlayer closes p as the program ends. A sound card stuck in a call is
+// left as it is, and the program ends regardless.
+func closePlayer(p *player.Player, log *slog.Logger) {
+	if err := p.Close(); err != nil {
+		log.Warn("close the player", "err", err)
+	}
 }
 
 // online reports whether the device has a network connection.

@@ -239,7 +239,7 @@ func run(started time.Time) error {
 		default: // a burst of them: the toast shows the latest anyway
 		}
 	})
-	defer p.Close()
+	defer closePlayer(p, log)
 
 	// A background player gives the music back before the saved queue is
 	// read; neither must hold up the first frame. Every later release keeps

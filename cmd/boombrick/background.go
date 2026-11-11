@@ -73,7 +73,7 @@ func runBackground() error {
 	p := newPlayer(db.DB, prefs, sp, online, log, func(n player.Notice) {
 		log.Info("streaming", "notice", int(n.Kind))
 	})
-	defer p.Close()
+	defer closePlayer(p, log)
 
 	snap, ok, err := resume.Load(db.DB)
 	if err != nil {
