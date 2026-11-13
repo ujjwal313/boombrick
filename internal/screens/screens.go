@@ -65,6 +65,25 @@ func SourceOf(path string) media.Source {
 	return media.Local
 }
 
+// musicPlace is where the music folder is, in words.
+var musicPlace = defaultMusicPlace
+
+const defaultMusicPlace = "the Music folder on the SD card"
+
+// SetMusicPlace says where the music folder is, in words, for the empty
+// library; "" is the SD card's Music folder.
+func SetMusicPlace(place string) {
+	musicPlace = place
+	if place == "" {
+		musicPlace = defaultMusicPlace
+	}
+}
+
+// EmptyLibraryText is what Home and the Library say when no music is indexed.
+func EmptyLibraryText() string {
+	return "Copy music to " + musicPlace + ", or find something on YouTube Music."
+}
+
 // DrawReading draws the state Home and the Library show while the first scan
 // runs and nothing is indexed yet, its description's lines kept in c.
 func DrawReading(u *ui.Context, c *widgets.Wrapped, musicDir string) {

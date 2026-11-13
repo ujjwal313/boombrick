@@ -28,8 +28,6 @@ var filterNames = [filterCount]string{"Albums", "Artists", "Songs", "Genres"}
 
 const listTop = contentTop + widgets.FiltersHeight
 
-const emptyText = "Copy music to the Music folder on the SD card, or find something on YouTube Music."
-
 // Library is the Library tab: albums, artists, songs or genres, chosen with
 // L2 and R2. Genres shows only when some song is tagged with one.
 type Library struct {
@@ -221,7 +219,7 @@ func (l *Library) Draw(u *ui.Context) {
 	switch {
 	case l.empty():
 		widgets.DrawBackground(u, widgets.StateGround)
-		widgets.EmptyState(u, &l.state, "Your library is empty", emptyText, l.musicDir)
+		widgets.EmptyState(u, &l.state, "Your library is empty", screens.EmptyLibraryText(), l.musicDir)
 	case l.ix == nil && l.reading:
 		screens.DrawReading(u, &l.state, l.musicDir)
 	default:

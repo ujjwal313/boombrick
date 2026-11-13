@@ -369,6 +369,7 @@ func run(started time.Time) error {
 		Started:    started,
 		Player:     p,
 		MusicDir:   paths.Music,
+		MusicPlace: prof.MusicPlace(),
 		Load:       func() (*library.Index, error) { return library.Load(db.DB) },
 		Progress:   func() ([]resume.Progress, error) { return resume.Recent(db.DB, 8) },
 		Rescan:     rescan,

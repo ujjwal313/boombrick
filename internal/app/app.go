@@ -47,6 +47,7 @@ type Options struct {
 	Started    time.Time // process start, for the launch-time log line
 	Player     *player.Player
 	MusicDir   string // shown by the empty library
+	MusicPlace string // where MusicDir is, in words, for the empty library; "" for the SD card's Music folder
 	// Load reads the library and Progress the albums in progress; the app calls
 	// them on a goroutine. Rescan asks for a scan. Scanned receives an update
 	// when a scan has written to the library, at most every few seconds while
@@ -354,6 +355,7 @@ func New(opts Options) (*App, error) {
 	if opts.Status != nil {
 		a.reader.Go(func() { watchStatus(opts.Status, statusEvery, a.statuses, a.wake, a.lit, a.stop) })
 	}
+	screens.SetMusicPlace(opts.MusicPlace)
 	a.home.SetEmpty(opts.MusicDir, func() { a.rescan(); a.Toast(screens.Scanning) })
 	a.library = browse.New(a, opts.Player, opts.MusicDir, a.rescan)
 	a.loads = newLoader(opts.Load, opts.Progress, a.wake)

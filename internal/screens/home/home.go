@@ -447,8 +447,7 @@ func (h *Home) drawEmpty(u *ui.Context) {
 	switch {
 	case h.set:
 		widgets.DrawBackground(u, widgets.StateGround)
-		widgets.EmptyState(u, &h.state, "Your library is empty",
-			"Copy music to the Music folder on the SD card, or find something on YouTube Music.", h.musicDir)
+		widgets.EmptyState(u, &h.state, "Your library is empty", screens.EmptyLibraryText(), h.musicDir)
 	case h.reading:
 		screens.DrawReading(u, &h.state, h.musicDir)
 	default:
