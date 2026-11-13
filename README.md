@@ -32,8 +32,8 @@ You need a TrimUI Brick or Brick Pro with NextUI, CrossMix or Knulli. Wi-Fi is u
    - **Knulli:** `Boombrick-Knulli.zip` from the same release.
 
    `Boombrick-PakStore.zip` holds the same NextUI app for the Pak Store, which unzips it into the app's folder; it isn't for the root of the card.
-2. Unzip it at the root of the SD card; on Knulli, at the root of the SHARE partition. It goes to `Tools/tg5040/Boombrick.pak` on NextUI, `Apps/Boombrick` on CrossMix, and `roms/ports` on Knulli.
-3. Put your music in the card's `Music` folder, in any layout; `Artist/Album/01 Title.flac` works best when files have no tags. On Knulli it's the `music` folder of the SHARE partition, which Knulli also plays in its menus when its background music is on.
+2. Unzip it at the root of the SD card; on Knulli, at the root of the SHARE partition. It goes to `Tools/tg5040/Boombrick.pak` on NextUI, `Apps/Boombrick` on CrossMix, and `roms/ports` on Knulli, where it adds `Boombrick.sh` and a `boombrick` folder. Its folders join the ones already on the card: your other apps and ports stay as they are.
+3. Put your music in the card's `Music` folder, making it if it isn't there; the zip doesn't hold one. On Knulli it's the `music` folder at the root of the SHARE partition, beside `roms` rather than inside it, which Knulli also plays in its menus when its background music is on. Any layout of folders inside it works; `Artist/Album/01 Title.flac` works best when files have no tags. The empty library shows the folder Boombrick reads, and Y there scans it again.
 4. Start Boombrick from Tools on NextUI, from Apps on CrossMix, or from Ports on Knulli (update the game lists first if it isn't there). The library is scanned on the first launch, and again on every launch after that.
 
 Betas are pre-releases: Settings never offers them, so they are only installed by hand. A beta is offered the next full release like any other version.
