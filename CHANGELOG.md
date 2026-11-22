@@ -2,6 +2,23 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.6.0]
+
+### Added
+
+- **Integrations:** Settings has a new Integrations page where you can switch Spotify and YouTube off if you don't use them. An integration switched off takes its tabs and settings with it and does no work in the background: Spotify's helper isn't started, and nothing is searched or downloaded from YouTube. Your sign-in, playlists, download queue and imports are kept, and downloaded songs stay in the Library, so switching it back on brings everything back at once.
+- **Import one song:** on a Spotify playlist's page, X on a song imports just that song to your downloads. X on the playlist's buttons still imports the whole playlist.
+
+### Changed
+
+- **Tab row:** L1 and R1 sit at the edges of the screen. When the tabs don't all fit, their names scroll between L1 and R1 to keep the tab you're on in view, fading out at the edges. R1 on the last tab goes to the first, and L1 on the first to the last.
+- Songs from an integration that is switched off are skipped in the queue, with "Spotify is off" or "YouTube is off". The song playing and the downloads under way when you switch it off finish first. Spotify songs you've imported still play from their downloads when **Prefer downloaded copies** is on.
+
+### Fixed
+
+- **Spotify accounts Spotify won't stream to:** Spotify gives some accounts, Premium ones too, no songs at all. Their songs waited with "Spotify needs a break" and then stopped. They are now skipped with "Spotify won't stream to this account", and the rest of the queue plays.
+- The R1 button at the right of the tab row was cut off.
+
 ## [v0.5.2]
 
 ### Fixed
