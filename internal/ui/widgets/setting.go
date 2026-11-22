@@ -41,18 +41,25 @@ func (p Panel) End(u *ui.Context) {
 	u.Alpha = p.alpha
 }
 
-// SettingHeight is the height of a row of Settings or the quick menu.
-const SettingHeight = 74
+// SettingHeight is the height of a row of Settings or the quick menu, and
+// SettingDetailHeight of one with a line about it under its label.
+const (
+	SettingHeight       = 74
+	SettingDetailHeight = 92
+)
 
 var (
-	settingLabel = text.Style{Face: text.Figtree, Size: 28}
-	settingValue = text.Style{Face: text.Figtree, Size: 22, Tabular: true}
+	settingLabel  = text.Style{Face: text.Figtree, Size: 28}
+	settingValue  = text.Style{Face: text.Figtree, Size: 22, Tabular: true}
+	settingDetail = text.Style{Face: text.Figtree, Size: 22}
 )
 
 // Setting is a row of Settings or the quick menu: an icon, a label, its value
-// on the right, and a chevron when the row opens a page.
+// on the right, and a chevron when the row opens a page. A row with a Detail,
+// a line about it under its label, is SettingDetailHeight tall.
 type Setting struct {
 	Icon, Label, Value string
+	Detail             string
 	Active             bool // the value in gold, as a running sleep timer's
 	Chevron            bool
 }
@@ -103,5 +110,14 @@ func DrawSetting(u *ui.Context, s Setting, box gfx.Rect, k float32, last bool) {
 	}
 	vw := u.TextWidth(s.Value, settingValue)
 	u.Text(s.Value, settingValue, right-vw, u.CenterY(settingValue, box.Y, box.H), col)
-	u.Text(u.Fit(s.Label, settingLabel, right-vw-24-x), settingLabel, x, u.CenterY(settingLabel, box.Y, box.H), theme.Paper)
+	room := right - vw - 24 - x
+	if s.Detail == "" {
+		u.Text(u.Fit(s.Label, settingLabel, room), settingLabel, x, u.CenterY(settingLabel, box.Y, box.H), theme.Paper)
+		return
+	}
+	// The label and the line about it, centred together.
+	lh, dh := u.LineHeight(settingLabel), u.LineHeight(settingDetail)
+	y := box.Y + (box.H-lh-dh)/2
+	u.Text(u.Fit(s.Label, settingLabel, room), settingLabel, x, y, theme.Paper)
+	u.Text(u.Fit(s.Detail, settingDetail, room), settingDetail, x, y+lh, theme.Ink3)
 }

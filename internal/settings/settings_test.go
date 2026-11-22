@@ -43,6 +43,10 @@ func TestDefaults(t *testing.T) {
 	if got := s.String(DownloadQuality); got != "best" {
 		t.Errorf("DownloadQuality = %q, want best", got)
 	}
+	// Installs from before the switches keep both integrations.
+	if !s.Bool(SpotifyOn) || !s.Bool(YouTubeOn) {
+		t.Error("the integrations should default to on")
+	}
 }
 
 func TestSetPersists(t *testing.T) {

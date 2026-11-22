@@ -17,6 +17,10 @@ const (
 	DownloadQuality  = "downloads.quality"
 	PreferDownloaded = "playback.prefer_downloaded"
 	VolumeLevelling  = "playback.volume_levelling"
+	// The integrations' switches: an integration switched off is hidden and
+	// does no work, but keeps its data.
+	SpotifyOn = "integrations.spotify"
+	YouTubeOn = "integrations.youtube"
 )
 
 // Defaults holds the value used for a key that has never been set.
@@ -25,6 +29,8 @@ var Defaults = map[string]string{
 	DownloadQuality:  "best",
 	PreferDownloaded: "true",
 	VolumeLevelling:  "true",
+	SpotifyOn:        "true",
+	YouTubeOn:        "true",
 }
 
 // Settings keeps the table in memory and writes changes behind the caller.
