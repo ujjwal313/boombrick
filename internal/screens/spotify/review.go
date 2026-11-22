@@ -42,8 +42,9 @@ type Review struct {
 	pls     []spotify.Playlist
 	first   bool // the first of the import's pages, which ends its leaving
 	cur     int
-	started map[string]bool // the playlists imported from this page
-	job     importer.Job    // the shown import, its songs changed as they change
+	started map[string]bool            // the playlists imported from this page
+	songs   map[string][]spotify.Track // an import of songs rather than a playlist, by its URI
+	job     importer.Job               // the shown import, its songs changed as they change
 	have    bool
 	version uint64 // the importer's, when job was last brought up to date
 	list    views.Grid
@@ -68,6 +69,24 @@ func NewReview(e *Env, pls []spotify.Playlist, first bool) *Review {
 		list: views.Grid{Cols: 1, CellW: theme.ScreenW - 2*screens.Side, CellH: widgets.RowHeight, Pad: screens.Pad}}
 }
 
+// NewSongReview imports song t alone, started from a playlist's page, as an
+// import of its own under the song's URI: the playlist's import is left as it
+// is.
+func NewSongReview(e *Env, t spotify.Track) *Review {
+	pl := spotify.Playlist{URI: "spotify:track:" + t.ID, Name: t.Title, Cover: t.Cover}
+	r := NewReview(e, []spotify.Playlist{pl}, true)
+	r.songs = map[string][]spotify.Track{pl.URI: {t}}
+	return r
+}
+
+// tracks is import uri's songs: its own, or the playlist's.
+func (r *Review) tracks(uri string) ([]spotify.Track, bool, error) {
+	if ts, ok := r.songs[uri]; ok {
+		return ts, true, nil
+	}
+	return r.e.Src.Tracks(uri)
+}
+
 // Claims keeps Start, which goes on to the downloads.
 func (r *Review) Claims(b input.Button) bool { return b == input.Start }
 
@@ -79,7 +98,7 @@ func (r *Review) refresh() {
 		if r.started[p.URI] {
 			continue
 		}
-		if ts, ok, _ := r.e.Src.Tracks(p.URI); ok {
+		if ts, ok, _ := r.tracks(p.URI); ok {
 			r.e.Import.Import(p.URI, p.Name, ts)
 			r.started[p.URI] = true
 		}
@@ -271,7 +290,7 @@ func (r *Review) Draw(u *ui.Context) {
 	switch {
 	case !r.have:
 		s := "Getting the songs…"
-		if _, ok, err := r.e.Src.Tracks(p.URI); !ok && err != nil {
+		if _, ok, err := r.tracks(p.URI); !ok && err != nil {
 			s = failText(err)
 		}
 		message(u, &r.msg, s, area)

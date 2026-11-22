@@ -18,6 +18,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/uitest"
+	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
 func TestMain(m *testing.M) { uitest.Main(m) }
@@ -366,5 +367,44 @@ func TestPlaylistPageMarksAndImports(t *testing.T) {
 	}
 	if r, ok := nav.pushed[0].(*Review); !ok || !r.first || r.pls[0].URI != lists[1].URI {
 		t.Fatalf("X opened %+v", nav.pushed[0])
+	}
+}
+
+// X on a song imports that song alone, as an import of its own, leaving the
+// playlist's import as it was.
+func TestPlaylistPageImportsTheSongFocused(t *testing.T) {
+	nav := &fakeNav{}
+	e, im, _ := importEnv(nav, signedIn())
+	pg := NewPlaylistPage(e, lists[1])
+	render(t, pg)
+	pg.Handle(press(input.Right), t0)
+	pg.Handle(press(input.Right), t0) // onto the songs
+	pg.Handle(press(input.Down), t0)  // Going Bad
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	h := pg.songHints()
+	if !slices.Contains(h, widgets.Hint{Key: "X", Label: "Import song"}) {
+		t.Fatalf("on a song, the hints are %v", h)
+	}
+	if w := widgets.HintsWidth(u, h); w > widgets.MaxHintsWidth {
+		t.Fatalf("hints %v are %.1f wide, more than %.1f", h, w, widgets.MaxHintsWidth)
+	}
+	pg.Handle(press(input.X), t0)
+	if len(nav.pushed) != 1 {
+		t.Fatalf("X opened %d pages", len(nav.pushed))
+	}
+	r, ok := nav.pushed[0].(*Review)
+	if !ok || !r.first {
+		t.Fatalf("X opened %+v", nav.pushed[0])
+	}
+	render(t, r)
+	uri := "spotify:track:" + road[1].ID
+	if !slices.Equal(im.imported, []string{uri}) {
+		t.Fatalf("imported %v", im.imported)
+	}
+	if j := im.jobs[uri]; j.Name != road[1].Title || len(j.Items) != 1 || j.Items[0].Track.ID != road[1].ID {
+		t.Fatalf("the song's import %+v", j)
+	}
+	if r.job.URI != uri || len(r.rows) != 1 {
+		t.Fatalf("the review shows %q, %d rows", r.job.URI, len(r.rows))
 	}
 }
