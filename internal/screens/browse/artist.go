@@ -79,7 +79,7 @@ func (pg *ArtistPage) Draw(u *ui.Context) {
 	screens.Heading(u, pg.artist.Name, pg.meta, albumTop)
 	drawAlbums(u, &pg.grid, pg.artist.Albums, pg.top, func(i int) string { return pg.subs[i] })
 	widgets.StatusBar(u)
-	widgets.Tabs(u, 1)
+	widgets.Tabs(u, widgets.TabLibrary)
 	widgets.HintBar(u, pg.hints())
 }
 

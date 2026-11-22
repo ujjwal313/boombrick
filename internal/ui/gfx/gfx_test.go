@@ -130,3 +130,29 @@ func TestDrawingDoesNotAllocate(t *testing.T) {
 		t.Fatalf("a clip, a draw and a fill allocate %v times", n)
 	}
 }
+
+// DrawPart copies only the part of the texture asked for.
+func TestDrawPartCopiesThePart(t *testing.T) {
+	o, err := NewOffscreen(16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	img := image.NewNRGBA(image.Rect(0, 0, 8, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 8; x++ {
+			img.SetNRGBA(x, y, color.NRGBA{255, 255, 255, 255})
+		}
+	}
+	tex, err := o.Upload(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tex.Destroy()
+	bg := color.NRGBA{0, 0, 0, 255}
+	o.Clear(bg)
+	o.DrawPart(tex, image.Rect(2, 0, 5, 4), Rect{X: 6, Y: 2, W: 3, H: 4}, color.NRGBA{255, 255, 255, 255})
+	if got, want := covered(o.Image(), bg), image.Rect(6, 2, 9, 6); got != want {
+		t.Errorf("part covers %v, want %v", got, want)
+	}
+}

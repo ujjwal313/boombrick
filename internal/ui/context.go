@@ -30,6 +30,14 @@ type Status struct {
 	Battery    int
 }
 
+// TabRow is the state of the tab row, which every screen draws alike: the
+// tabs shown and how far their names are scrolled.
+type TabRow struct {
+	Shown  []int      // the IDs of the tabs shown, in order; nil shows them all
+	Scroll anim.Value // how far the names are scrolled left, in design pixels
+	Placed bool       // Scroll has been set for the row as it is
+}
+
 // Covers supplies album art. Neither method blocks: each returns nil while
 // the picture is being prepared, and none once it's known there is none. A
 // picture is handed over once; the context keeps it as a texture.
@@ -55,6 +63,7 @@ type Context struct {
 	Accent     theme.Accent
 	Fade       Fade // a change of accent under way, for the backgrounds
 	Status     Status
+	Tabs       TabRow
 	Now        time.Time
 	Scale      float32 // device pixels per design pixel
 	Alpha      float32 // multiplies the opacity of everything drawn; screens fade with it
@@ -365,6 +374,73 @@ func (u *Context) TextIn(c *TextCache, s string, st text.Style, x, y float32, co
 	return e.width
 }
 
+// fadeSlice is the width, in device pixels, of the slices TextFade draws a
+// fade in.
+const fadeSlice = 2
+
+// TextFade draws s as Text does, but only between left and right, fading it
+// out over fadeL design pixels inside the left edge and fadeR inside the
+// right (0 for none), and returns its advance. The fades are drawn in slices
+// fadeSlice device pixels wide, each a little fainter, with the renderer's
+// plain copies.
+func (u *Context) TextFade(s string, st text.Style, x, y float32, col color.NRGBA, left, right, fadeL, fadeR float32) float32 {
+	if s == "" {
+		return 0
+	}
+	e, ok := u.text(u.texts, s, st)
+	if !ok {
+		return 0
+	}
+	pad := float32(text.Pad(u.device(st))) / u.Scale
+	dst := u.Apply(gfx.Rect{X: x - pad, Y: y - e.top, W: float32(e.tex.W) / u.Scale, H: float32(e.tex.H) / u.Scale})
+	if nearInt(dst.W, e.tex.W) && nearInt(dst.H, e.tex.H) {
+		// As Canvas.Draw places a 1:1 copy, so the slices meet whole pixels.
+		dst = gfx.Rect{X: round(dst.X), Y: round(dst.Y), W: float32(e.tex.W), H: float32(e.tex.H)}
+	}
+	win := u.Apply(gfx.Rect{X: left, W: right - left})
+	fl, fr := u.Apply(gfx.Rect{W: fadeL}).W, u.Apply(gfx.Rect{W: fadeR}).W
+	l, r := win.X, win.X+win.W
+	k := dst.W / float32(e.tex.W) // device pixels per texture pixel
+	col = u.tint(col)
+	for tx := 0; tx < e.tex.W; {
+		x0 := dst.X + float32(tx)*k
+		var end int
+		a := float32(1)
+		if x0 >= l+fl && x0 < r-fr {
+			end = int(math.Ceil(float64((r - fr - dst.X) / k))) // the rest of the part shown whole
+		} else {
+			end = tx + max(1, int(fadeSlice/k))
+			mid := (x0 + dst.X + float32(end)*k) / 2
+			a = min(edgeAlpha(mid-l, fl), edgeAlpha(r-mid, fr))
+		}
+		end = min(max(end, tx+1), e.tex.W)
+		if a > 0 {
+			c := col
+			c.A = uint8(float32(c.A)*a + 0.5)
+			u.Canvas.DrawPart(e.tex, image.Rect(tx, 0, end, e.tex.H),
+				gfx.Rect{X: x0, Y: dst.Y, W: float32(end-tx) * k, H: dst.H}, c)
+		}
+		tx = end
+	}
+	return e.width
+}
+
+// edgeAlpha is how opaque text is d device pixels inside an edge it fades
+// out over f: none outside the edge, all of it past the fade or with none.
+func edgeAlpha(d, f float32) float32 {
+	switch {
+	case d <= 0:
+		return 0
+	case f <= 0:
+		return 1
+	}
+	return min(d/f, 1)
+}
+
+func round(v float32) float32 { return float32(math.Round(float64(v))) }
+
+func nearInt(v float32, n int) bool { return math.Abs(float64(v)-float64(n)) < 0.01 }
+
 // PrepareText makes the texture TextIn would draw s with and keeps it in c,
 // drawing nothing, so that a frame to come can draw it without making it. It
 // reports whether it had to be made.
@@ -536,9 +612,14 @@ func (u *Context) BeginFrame(now time.Time) {
 	u.uploads, u.pending = 0, false
 }
 
-// Animating reports whether the last frame left a cover fading in, or one
-// waiting for its turn to be uploaded, so another frame is due.
+// Animating reports whether the last frame left a cover fading in, one
+// waiting for its turn to be uploaded, or the tab row scrolling (KeepDrawing),
+// so another frame is due.
 func (u *Context) Animating() bool { return u.pending }
+
+// KeepDrawing says the frame drawn has something still moving that no screen
+// knows of, as the tab row's scroll, so another frame is due.
+func (u *Context) KeepDrawing() { u.pending = true }
 
 // Cover returns c's art for an element size design pixels square with
 // corners of radius, and how opaque to draw it: each cover fades in over

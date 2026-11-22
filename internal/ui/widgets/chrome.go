@@ -8,6 +8,8 @@ import (
 
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
+	"github.com/ujjwal313/boombrick/internal/ui/anim"
+	"github.com/ujjwal313/boombrick/internal/ui/focus"
 	"github.com/ujjwal313/boombrick/internal/ui/gfx"
 	"github.com/ujjwal313/boombrick/internal/ui/raster"
 	"github.com/ujjwal313/boombrick/internal/ui/text"
@@ -20,8 +22,33 @@ const (
 	HintsHeight  = 56
 )
 
-// TabNames are the top-level tabs in order.
-var TabNames = [...]string{"Home", "Library", "Spotify", "YouTube", "Downloads"}
+// The top-level tabs' IDs, in the order the row shows them. Which are shown
+// is u.Tabs.Shown.
+const (
+	TabHome = iota
+	TabLibrary
+	TabSpotify
+	TabYouTube
+	TabDownloads
+	TabCount
+)
+
+var tabNames = [TabCount]string{"Home", "Library", "Spotify", "YouTube", "Downloads"}
+
+// allTabs is every tab, shown when u.Tabs.Shown is nil.
+var allTabs = []int{TabHome, TabLibrary, TabSpotify, TabYouTube, TabDownloads}
+
+// TabName is the name tab id shows.
+func TabName(id int) string { return tabNames[id] }
+
+// The tab row's layout, in design pixels.
+const (
+	tabSide    = 32 // the row's padding
+	tabPillGap = 26 // between a pill and the names
+	tabGap     = 30 // between names
+	tabFade    = 24 // the names fade out over this inside the window between the pills
+	tabPeek    = 40 // of the names beside the active one kept in view
+)
 
 // maxDeviceName is the most room the Bluetooth device's name takes in the
 // status bar.
@@ -108,27 +135,82 @@ func Battery(u *ui.Context, x, y float32, percent int) {
 	u.Fill(gfx.Rect{X: x + 37, Y: y + 6, W: 3, H: 6}, theme.Paper)
 }
 
-// Tabs draws the tab row under the status bar with tab active underlined in
-// the accent.
+// Tabs draws the tab row under the status bar: the tabs shown, tab active
+// underlined in the accent. The row spans the screen, the L1 and R1 pills at
+// its paddings, and the names start after L1. When they don't fit between the
+// pills they scroll there, fading out at the window's edges; the row slides,
+// as little as it can, to keep the active name and some of those beside it in
+// view.
 func Tabs(u *ui.Context, active int) {
 	const y = StatusHeight
-	x := float32(32)
-	pillY := y + (TabsHeight-TabPill.Height)/2
-	x += KeyGlyph(u, "L1", x, pillY, TabPill, theme.PaperA(0.45)) + 26
+	pillY := float32(y + (TabsHeight-TabPill.Height)/2)
+	border := theme.PaperA(0.45)
+	start := tabSide + KeyGlyph(u, "L1", tabSide, pillY, TabPill, border) + tabPillGap
+	r1 := glyphWidth(u, "R1", TabPill)
 	lh := u.LineHeight(text.Tab)
 	ty := y + (TabsHeight-lh)/2 - 4
-	for i, name := range TabNames {
+	shown := u.Tabs.Shown
+	if shown == nil {
+		shown = allTabs
+	}
+	// Each name's place along the names, unscrolled, and its width.
+	var xs, ws [TabCount]float32
+	var total float32
+	at := -1
+	for i, id := range shown {
+		if i > 0 {
+			total += tabGap
+		}
+		xs[i], ws[i] = total, u.TextWidth(tabNames[id], text.Tab)
+		total += ws[i]
+		if id == active {
+			at = i
+		}
+	}
+	right := float32(theme.ScreenW) - tabSide - r1 - tabPillGap // the window's right edge
+	// How far the names are scrolled, and how much each edge fades: as much as
+	// is hidden past it, up to tabFade, so an end of the row doesn't fade.
+	// Names that fit neither scroll nor fade.
+	var off, fadeL, fadeR float32
+	if start+total > right {
+		view := float64(right - start)
+		to := u.Tabs.Scroll.Target()
+		if at >= 0 {
+			to = focus.Scroll(to, float64(xs[at]-tabPeek), float64(xs[at]+ws[at]+tabPeek), view)
+		}
+		to = min(max(to, 0), float64(total)-view)
+		switch {
+		case !u.Tabs.Placed:
+			u.Tabs.Scroll.Set(to)
+			u.Tabs.Placed = true
+		case to != u.Tabs.Scroll.Target():
+			u.Tabs.Scroll.To(to, u.Now, anim.Focus, anim.EaseOutCubic)
+		}
+		if !u.Tabs.Scroll.Done(u.Now) {
+			u.KeepDrawing()
+		}
+		off = float32(u.Tabs.Scroll.At(u.Now))
+		fadeL, fadeR = min(off, tabFade), min(total-float32(view)-off, tabFade)
+	} else {
+		u.Tabs.Scroll.Set(0)
+		u.Tabs.Placed = true
+	}
+	for i, id := range shown {
+		x := start + xs[i] - off
+		if x+ws[i] <= start || x >= right {
+			continue
+		}
 		col := theme.Ink3
-		if i == active {
+		if id == active {
 			col = theme.Paper
 		}
-		w := u.Text(name, text.Tab, x, ty, col)
-		if i == active {
-			u.Fill(gfx.Rect{X: x, Y: ty + lh + 4, W: w, H: 3}, u.Accent.Color)
+		u.TextFade(tabNames[id], text.Tab, x, ty, col, start, right, fadeL, fadeR)
+		if id == active {
+			l, r := max(x, start), min(x+ws[i], right)
+			u.Fill(gfx.Rect{X: l, Y: ty + lh + 4, W: r - l, H: 3}, u.Accent.Color)
 		}
-		x += w + 30
 	}
-	KeyGlyph(u, "R1", x-30+26, pillY, TabPill, theme.PaperA(0.45))
+	KeyGlyph(u, "R1", right+tabPillGap, pillY, TabPill, border)
 }
 
 // GlyphStyle sizes a button glyph.

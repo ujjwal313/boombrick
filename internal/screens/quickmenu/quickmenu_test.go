@@ -48,7 +48,7 @@ func draw(t *testing.T, m *Menu) *image.NRGBA {
 	u.BeginFrame(t0.Add(anim.Dialog))
 	widgets.DrawBackground(u, widgets.TabGround)
 	widgets.StatusBar(u)
-	widgets.Tabs(u, 0)
+	widgets.Tabs(u, widgets.TabHome)
 	widgets.HintBar(u, []widgets.Hint{{Key: "L1/R1", Label: "Tabs"}})
 	m.Draw(u)
 	return off.Image()

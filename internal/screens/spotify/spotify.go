@@ -18,8 +18,8 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
-// tab is the Spotify tab's place in the tab row.
-const tab = 2
+// tab is the Spotify tab's ID.
+const tab = widgets.TabSpotify
 
 // Source is the Spotify library as these screens ask it: each call returns
 // what is known and asks for what isn't. *spotify.Library is one.

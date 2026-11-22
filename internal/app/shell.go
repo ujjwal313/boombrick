@@ -38,10 +38,11 @@ type overlay struct {
 // full-screen overlays, and runs their transitions and toasts. It knows
 // nothing of SDL, so it is tested on its own.
 type shell struct {
-	stacks   [][]screens.Screen // per tab, root first
-	tab      int
-	trans    anim.Value     // the top page sliding in: 0 to 1 on a push, 1 to 0 on a pop
-	leaving  screens.Screen // the page being popped, until its transition ends
+	stacks   [][]screens.Screen // per tab ID, root first
+	visible  []int              // the IDs of the tabs shown, in order; nil for all
+	tab      int                // the ID of the tab shown
+	trans    anim.Value         // the top page sliding in: 0 to 1 on a push, 1 to 0 on a pop
+	leaving  screens.Screen     // the page being popped, until its transition ends
 	overlays []overlay
 	open     int        // the open overlay, or -1
 	showing  int        // the overlay drawn: the open one, or one fading out
@@ -126,13 +127,61 @@ func (s *shell) pop(now time.Time) {
 	s.trans.To(0, now, anim.Push, anim.EaseOutCubic)
 }
 
-// showTab shows tab t, closing any overlay over it.
+// showTab shows tab t, closing any overlay over it. A tab not shown stays
+// hidden, and nothing changes.
 func (s *shell) showTab(t int, now time.Time) {
+	if s.place(t) < 0 {
+		return
+	}
 	if s.open >= 0 {
 		s.closeOverlay(now)
 	}
 	s.tab, s.leaving = t, nil
 	s.trans.Set(1)
+}
+
+// tabs is the IDs of the tabs shown, in order.
+func (s *shell) tabs() []int {
+	if s.visible != nil {
+		return s.visible
+	}
+	all := make([]int, len(s.stacks))
+	for i := range all {
+		all[i] = i
+	}
+	return all
+}
+
+// place is tab t's place among those shown, or -1 when it is hidden.
+func (s *shell) place(t int) int {
+	for i, id := range s.tabs() {
+		if id == t {
+			return i
+		}
+	}
+	return -1
+}
+
+// setShown shows the tabs ids, in order; nil shows them all. A hidden tab
+// keeps its pages. When the tab shown is hidden, the first shown, Home, takes
+// its place under any overlay, so that is what closing the overlay shows.
+func (s *shell) setShown(ids []int) {
+	s.visible = ids
+	if s.place(s.tab) < 0 {
+		s.tab, s.leaving = s.tabs()[0], nil
+		s.trans.Set(1)
+	}
+}
+
+// step is the tab dir places on from the one shown among those shown,
+// wrapping at both ends, and false when there is no other.
+func (s *shell) step(dir int) (int, bool) {
+	ids := s.tabs()
+	if len(ids) < 2 {
+		return 0, false
+	}
+	i := (s.place(s.tab) + dir + len(ids)) % len(ids)
+	return ids[i], true
 }
 
 // showToast replaces any toast; one already fully shown stays at full alpha.
@@ -176,8 +225,9 @@ func (s *shell) closeOverlay(now time.Time) {
 // alone: NextUI sets the brightness with Menu and the volume buttons. An
 // overlay's button opens it from anywhere, or closes it when it is open; B
 // closes an open overlay, unless the overlay uses it, or pops a page; L1 and
-// R1 switch tabs when no overlay is open. The screen input goes to may claim
-// one of those buttons for itself (screens.Claimer).
+// R1 switch between the tabs shown, wrapping at the ends, when no overlay is
+// open. The screen input goes to may claim one of those buttons for itself
+// (screens.Claimer).
 func (s *shell) handle(e input.Event, now time.Time) bool {
 	if s.alert != nil && s.alert.IsOpen() {
 		return s.alert.Handle(e, now)
@@ -225,11 +275,12 @@ func (s *shell) handle(e input.Event, now time.Time) bool {
 			s.pop(now)
 			return true
 		case (e.Button == input.L1 || e.Button == input.R1) && s.open < 0:
-			t := s.tab - 1
+			dir := -1
 			if e.Button == input.R1 {
-				t = s.tab + 1
+				dir = 1
 			}
-			if t < 0 || t >= len(s.stacks) {
+			t, ok := s.step(dir)
+			if !ok {
 				return false
 			}
 			s.tab, s.leaving = t, nil

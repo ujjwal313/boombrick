@@ -344,3 +344,74 @@ func TestAFailedUploadWaits(t *testing.T) {
 		t.Fatalf("built %d times, want again after %v", builds, failWait)
 	}
 }
+
+// TextFade with room for the whole text and no fade over it draws what Text
+// draws.
+func TestTextFadeWithRoomDrawsAsText(t *testing.T) {
+	a, offA := newContext(t, 1.25)
+	b, offB := newContext(t, 1.25)
+	bg := color.NRGBA{0, 0, 0, 255}
+	offA.Clear(bg)
+	offB.Clear(bg)
+	wa := a.Text("Library", text.Tab, 10, 10, theme.Paper)
+	wb := b.TextFade("Library", text.Tab, 10, 10, theme.Paper, 0, 160, 4, 4)
+	if wa != wb {
+		t.Errorf("advance %v, want %v", wb, wa)
+	}
+	ia, ib := offA.Image(), offB.Image()
+	if !bytes.Equal(ia.Pix, ib.Pix) {
+		t.Error("TextFade drew other pixels than Text")
+	}
+}
+
+// Across both edges, text is as Text draws it between the fades, fainter in
+// them and gone outside the window.
+func TestTextFadeFadesAtTheEdges(t *testing.T) {
+	plain, offA := newContext(t, 1)
+	faded, offB := newContext(t, 1)
+	bg := color.NRGBA{0, 0, 0, 255}
+	offA.Clear(bg)
+	offB.Clear(bg)
+	const s = "Downloads Downloads"
+	if w := plain.Text(s, text.Tab, -20, 10, theme.Paper); w < 220 {
+		t.Fatalf("the text is %v wide; the test needs it past both edges", w)
+	}
+	faded.TextFade(s, text.Tab, -20, 10, theme.Paper, 20, 160, 30, 30)
+	a, b := offA.Image(), offB.Image()
+	// The ink in each column, summed down the text's rows.
+	ink := func(img *image.NRGBA, x int) int {
+		n := 0
+		for y := 0; y < 100; y++ {
+			n += int(img.NRGBAAt(x, y).R)
+		}
+		return n
+	}
+	sum := func(img *image.NRGBA, x0, x1 int) int {
+		n := 0
+		for x := x0; x < x1; x++ {
+			n += ink(img, x)
+		}
+		return n
+	}
+	for x := range 200 {
+		pa, pb := ink(a, x), ink(b, x)
+		switch {
+		case x < 20 || x >= 160:
+			if pb != 0 {
+				t.Fatalf("outside the window, column %d has ink %d", x, pb)
+			}
+		case x >= 50 && x < 130:
+			if d := pa - pb; d > 3*100 || d < -3*100 {
+				t.Fatalf("between the fades, column %d: ink %d, Text's %d", x, pb, pa)
+			}
+		case pb > pa+100:
+			t.Fatalf("in a fade, column %d has more ink (%d) than Text's (%d)", x, pb, pa)
+		}
+	}
+	for _, z := range [][2]int{{20, 50}, {130, 160}} {
+		pa, pb := sum(a, z[0], z[1]), sum(b, z[0], z[1])
+		if pb*10 < pa || pb*4 > pa*3 {
+			t.Errorf("fade %v: ink %d of Text's %d, want between a tenth and three quarters", z, pb, pa)
+		}
+	}
+}
