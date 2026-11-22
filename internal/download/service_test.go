@@ -23,10 +23,10 @@ import (
 
 // fakeFetcher runs batches by its steps for each song: "ok" (the default)
 // lands it, "gone" fails it, "hold" starts it and waits for the batch to be
-// stopped, "net" loses the network and fails with it, "down" fails with the
-// network while Wi-Fi stays up, "panic" panics. It
-// records the batches, the context of the latest, and the batches that began
-// while the queue was paused.
+// stopped, "slow" lands it once slow is closed, "net" loses the network and
+// fails with it, "down" fails with the network while Wi-Fi stays up, "panic"
+// panics. It records the batches, the context of the latest, and the batches
+// that began while the queue was paused.
 type fakeFetcher struct {
 	mu      sync.Mutex
 	parts   string
@@ -41,6 +41,7 @@ type fakeFetcher struct {
 	searching bool          // a search is under way
 	overlaps  int           // searches and batches that ran at once
 	gate      chan struct{} // a search waits for this to close, when set
+	slow      chan struct{} // a "slow" song waits for this to close
 }
 
 func (f *fakeFetcher) Run(ctx context.Context, ids []string, event func(Event)) error {
@@ -69,6 +70,18 @@ func (f *fakeFetcher) Run(ctx context.Context, ids []string, event func(Event)) 
 		case "hold":
 			<-ctx.Done()
 			return ctx.Err()
+		case "slow":
+			f.mu.Lock()
+			slow := f.slow
+			f.mu.Unlock()
+			select {
+			case <-slow:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			src := filepath.Join(f.parts, id+".webm")
+			os.WriteFile(src, []byte("webm "+id), 0o644)
+			event(Event{ID: id, Path: src})
 		case "gone":
 			event(Event{ID: id, Failure: Unavailable, Message: "Video unavailable"})
 		case "net":
@@ -408,6 +421,42 @@ func TestPausing(t *testing.T) {
 	if n := len(e.f.runs()); n != 2 {
 		t.Fatalf("%d batches", n)
 	}
+}
+
+// Held, as while YouTube is switched off, the queue begins no batch, but the
+// one under way finishes; the user's pause is a thing of its own.
+func TestHolding(t *testing.T) {
+	e := newEnv(t)
+	slow := make(chan struct{})
+	e.f.mu.Lock()
+	e.f.slow = slow
+	e.f.mu.Unlock()
+	e.f.set("v1", "slow")
+	e.s.Get([]ytmusic.Song{song("v1", "a", 1)})
+	eventually(t, "v1 under way", e.is("v1", media.Downloading))
+	e.s.SetHeld(true)
+	e.s.Get([]ytmusic.Song{song("v2", "b", 2)})
+	close(slow)
+	eventually(t, "v1 saved", e.is("v1", media.Saved))
+	time.Sleep(50 * time.Millisecond)
+	if !e.is("v2", media.Queued)() || len(e.f.runs()) != 1 {
+		t.Fatalf("a batch began while held: %v", e.f.runs())
+	}
+	if e.s.Status().Paused {
+		t.Fatal("holding the queue paused it")
+	}
+	if got := e.s.Note(); got != "YouTube is off" {
+		t.Fatalf("held, the note says %q", got)
+	}
+	// Paused by the user meanwhile, it stays paused when the hold ends.
+	e.s.SetPaused(true)
+	e.s.SetHeld(false)
+	time.Sleep(50 * time.Millisecond)
+	if !e.is("v2", media.Queued)() || len(e.f.runs()) != 1 {
+		t.Fatalf("a batch began while paused: %v", e.f.runs())
+	}
+	e.s.SetPaused(false)
+	eventually(t, "v2 saved", e.is("v2", media.Saved))
 }
 
 func TestWaitingForWiFiAndSpace(t *testing.T) {

@@ -294,6 +294,46 @@ func TestCancel(t *testing.T) {
 	}
 }
 
+// Two imports can share a song's download, as a playlist's and the song's own
+// do: the second finds it queued and counts on it, so cancelling the first
+// leaves it in the queue.
+func TestASharedDownloadStaysForTheOtherImport(t *testing.T) {
+	yt := &fakeYT{answers: answers()}
+	im, q := start(t, openDB(t), yt, nil)
+	im.Import(road, "Road trip", []spotify.Track{sapphire, tereyPapa})
+	settled(t, im, road)
+	one := "spotify:track:" + sapphire.ID
+	im.Import(one, "Sapphire", []spotify.Track{sapphire})
+	if j := settled(t, im, one); j.Items[0].State != Have {
+		t.Fatalf("the song alone: %v", states(j))
+	}
+	im.Cancel(road)
+	if !slices.Equal(q.removed, []string{"i"}) {
+		t.Fatalf("cancelling the playlist removed %v", q.removed)
+	}
+}
+
+// Two imports that accepted the same download keep it while either has it.
+func TestADownloadAcceptedTwiceStaysWhileOneHasIt(t *testing.T) {
+	yt := &fakeYT{answers: answers()}
+	im, q := start(t, openDB(t), yt, nil)
+	const other = "spotify:playlist:0ther0000000000000000"
+	im.Import(road, "Road trip", []spotify.Track{stan})
+	im.Import(other, "Other", []spotify.Track{stan})
+	settled(t, im, road)
+	settled(t, im, other)
+	im.Use(road, stan.ID, 0)
+	im.Use(other, stan.ID, 0)
+	im.Cancel(road)
+	if len(q.removed) != 0 {
+		t.Fatalf("cancelling one import removed %v", q.removed)
+	}
+	im.Skip(other, stan.ID)
+	if !slices.Equal(q.removed, []string{"l"}) {
+		t.Fatalf("with no import left having it, removed %v", q.removed)
+	}
+}
+
 // A pass writes only the songs that changed, and a song dropped from the
 // playlist while it was being matched isn't written back.
 func TestOnlyWhatChangedIsWritten(t *testing.T) {
@@ -424,5 +464,25 @@ func TestChangedAndOffline(t *testing.T) {
 	online.Store(true)
 	if j := settled(t, im2, road); j.Items[0].State != Matched {
 		t.Fatalf("back online: %v", j.Items[0].State)
+	}
+}
+
+// Switched off, as while Spotify or YouTube is, the importer matches nothing
+// and doesn't look again until it is switched on.
+func TestSwitchedOffMatchesNothing(t *testing.T) {
+	yt := &fakeYT{answers: answers()}
+	im, _ := start(t, openDB(t), yt, nil)
+	im.SetEnabled(false)
+	im.Import(road, "Road trip", []spotify.Track{tereyPapa})
+	time.Sleep(30 * time.Millisecond)
+	if n := len(yt.queries()); n != 0 {
+		t.Fatalf("searched %d times switched off", n)
+	}
+	if j, _ := im.Job(road); j.Count(Waiting) != 1 {
+		t.Fatal("the song should wait to be matched")
+	}
+	im.SetEnabled(true)
+	if j := settled(t, im, road); j.Items[0].State != Matched {
+		t.Fatalf("switched on: %v", j.Items[0].State)
 	}
 }
