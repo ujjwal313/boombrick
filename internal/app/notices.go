@@ -22,6 +22,8 @@ func noticeText(n player.Notice) string {
 		return "Spotify session expired"
 	case player.NeedsPremium:
 		return "Spotify songs need Spotify Premium"
+	case player.Refused:
+		return "Spotify won’t stream to this account"
 	}
 	return "Skipped a Spotify song that couldn’t play"
 }

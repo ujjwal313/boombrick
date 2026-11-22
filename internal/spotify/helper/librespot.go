@@ -47,6 +47,9 @@ const (
 	// keepMax how many: each holds what it has downloaded.
 	keepFor = time.Minute
 	keepMax = 2
+	// refusedFor is how long the streams of an account Spotify gives no keys
+	// are refused without asking, before one asks again.
+	refusedFor = 2 * time.Minute
 	// Listing limits: rootlist entries per request, and the most pages and
 	// tracks a list is read to.
 	rootlistPage = 500
@@ -72,7 +75,10 @@ type Librespot struct {
 	st       spotify.State
 	login    *spotify.Login
 	premium  bool
-	free     bool // as premium, only once the access point has said so
+	free     bool      // as premium, only once the access point has said so
+	keyed    bool      // the session has been given a key
+	refused  time.Time // when a key was first refused, before one was given
+	refusing time.Time // until when the account's streams are refused without asking
 	country  string
 	name     string            // the account's display name, once looked up
 	names    map[string]string // display names by user ID
@@ -394,11 +400,14 @@ func (s *Librespot) Stream(ctx context.Context, id string, ms int64, kbps int, l
 	if s.freeOn(sess) {
 		return nil, spotify.ErrPremium // not worth asking for a key
 	}
+	if s.refusedOn(sess) {
+		return nil, spotify.ErrRefused
+	}
 	s.log.Info("open stream", "id", id, "kbps", kbps)
 	o, err := s.open(ctx, sess, *sid, kbps, level, ms)
 	if err != nil {
 		s.log.Warn("open stream", "id", id, "err", err)
-		return nil, refused(err, s.freeOn(sess))
+		return nil, s.refusal(sess, err)
 	}
 	return s.adopt(key, o, o.duration, sess), nil
 }
@@ -467,6 +476,7 @@ func (s *Librespot) connect(n int) {
 // that arrive after this are heard.
 func (s *Librespot) attachLocked(sess *session.Session) {
 	s.sess, s.premium, s.free, s.country = sess, false, false, ""
+	s.keyed, s.refused, s.refusing = false, time.Time{}, time.Time{}
 	s.setLocked(spotify.Ready)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -681,15 +691,51 @@ func (s *Librespot) freeOn(sess *session.Session) bool {
 	return s.sess == sess && s.free
 }
 
-// refused is why a stream didn't open, on a free account if free is set. A
-// refused key asks for a wait, except on a free account: Spotify gives keys to
-// Premium alone, so waiting would never end.
-func refused(err error, free bool) error {
-	var key *audio.KeyProviderError
-	if free && errors.As(err, &key) {
-		return fmt.Errorf("%w: %w", spotify.ErrPremium, err)
+// refusedOn reports whether sess's account is being refused its streams
+// without asking; false once sess has been replaced.
+func (s *Librespot) refusedOn(sess *session.Session) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sess == sess && time.Now().Before(s.refusing)
+}
+
+// gotKey notes that sess has been given a key, so its account has them.
+func (s *Librespot) gotKey(sess *session.Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sess == sess {
+		s.keyed, s.refused, s.refusing = true, time.Time{}, time.Time{}
 	}
-	return classify(err)
+}
+
+// refusal is why a stream didn't open on sess. A refused key is waited out,
+// as Spotify's pause after a burst of keys. But on a session that has had no
+// key, refused again once that wait is over, the account is taken as refused:
+// Spotify gives some accounts, Premium ones too, no keys at all. On a free
+// account it needs Premium, as waiting would never end.
+func (s *Librespot) refusal(sess *session.Session, err error) error {
+	var key *audio.KeyProviderError
+	if !errors.As(err, &key) {
+		return classify(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case s.sess != sess || s.keyed:
+		return classify(err)
+	case s.free:
+		return fmt.Errorf("%w: %w", spotify.ErrPremium, err)
+	case s.refused.IsZero():
+		s.refused = time.Now()
+		return classify(err)
+	case time.Since(s.refused) < spotify.KeyWait:
+		return classify(err)
+	}
+	if s.refusing.IsZero() {
+		s.log.Warn("spotify refuses this account's keys", "since", s.refused)
+	}
+	s.refusing = time.Now().Add(refusedFor)
+	return fmt.Errorf("%w: %w", spotify.ErrRefused, err)
 }
 
 // classify turns go-librespot's errors into the helper's.

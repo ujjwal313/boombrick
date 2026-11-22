@@ -76,6 +76,9 @@ var (
 	ErrUnavailable = errors.New("spotify: not available here")
 	// ErrPremium means the account is free, and streaming needs Premium.
 	ErrPremium = errors.New("spotify: needs Premium")
+	// ErrRefused means Spotify gives the account no keys, Premium or not, so
+	// none of its streams open.
+	ErrRefused = errors.New("spotify: refuses this account")
 	// ErrOffline means Spotify can't be reached.
 	ErrOffline = errors.New("spotify: offline")
 )
@@ -110,6 +113,8 @@ func StatusOf(err error) (int, time.Duration) {
 		return http.StatusForbidden, 0
 	case errors.Is(err, ErrPremium):
 		return http.StatusPaymentRequired, 0
+	case errors.Is(err, ErrRefused):
+		return http.StatusLocked, 0
 	case errors.As(err, &th):
 		return http.StatusTooManyRequests, th.Wait
 	case errors.Is(err, ErrOffline):
@@ -128,6 +133,8 @@ func ErrorOf(code int, retryAfter, msg string) error {
 		return ErrUnavailable
 	case http.StatusPaymentRequired:
 		return ErrPremium
+	case http.StatusLocked:
+		return ErrRefused
 	case http.StatusTooManyRequests:
 		wait := KeyWait
 		if s, err := strconv.Atoi(retryAfter); err == nil && s > 0 {

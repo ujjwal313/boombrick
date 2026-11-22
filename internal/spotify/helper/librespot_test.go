@@ -94,19 +94,67 @@ func TestProductType(t *testing.T) {
 	}
 }
 
-// Spotify refuses a free account the keys streams need. A refused key on any
-// other account, Premium or not yet heard of, asks for a wait.
+// Spotify refuses a free account the keys streams need.
 func TestARefusedKeyOnAFreeAccountNeedsPremium(t *testing.T) {
+	sess := &session.Session{}
+	s := &Librespot{log: slog.New(slog.DiscardHandler), sess: sess, free: true}
 	key := fmt.Errorf("audio key: %w", &audio.KeyProviderError{Code: 1})
 	var th *spotify.Throttled
-	if err := refused(key, true); !errors.Is(err, spotify.ErrPremium) || errors.As(err, &th) {
+	if err := s.refusal(sess, key); !errors.Is(err, spotify.ErrPremium) || errors.As(err, &th) {
 		t.Fatalf("free: %v", err)
 	}
-	if err := refused(key, false); !errors.As(err, &th) || th.Wait != spotify.KeyWait {
-		t.Fatalf("Premium or not yet known: %v", err)
-	}
-	if err := refused(librespot.ErrMediaRestricted, true); !errors.Is(err, spotify.ErrUnavailable) {
+	if err := s.refusal(sess, librespot.ErrMediaRestricted); !errors.Is(err, spotify.ErrUnavailable) {
 		t.Fatalf("a restricted track on a free account: %v", err)
+	}
+}
+
+// Spotify gives some Premium accounts no keys at all. Before a session has had
+// a key, a refused key is waited out, as a pause after a burst of keys would
+// be; refused again once the wait is over, the account is taken as refused,
+// and its streams are refused at once, without asking, for a while.
+func TestAnAccountGivenNoKeysIsRefused(t *testing.T) {
+	sess := &session.Session{} // never reached: asking it anything would panic
+	s := &Librespot{log: slog.New(slog.DiscardHandler), busy: map[string]*stream{}, sess: sess, st: spotify.Ready, premium: true}
+	key := fmt.Errorf("audio key: %w", &audio.KeyProviderError{Code: 1})
+	var th *spotify.Throttled
+	for i := range 3 {
+		if err := s.refusal(sess, key); !errors.As(err, &th) || th.Wait != spotify.KeyWait {
+			t.Fatalf("refusal %d, during the wait: %v", i, err)
+		}
+	}
+	s.refused = s.refused.Add(-spotify.KeyWait) // the wait is over
+	if err := s.refusal(sess, key); !errors.Is(err, spotify.ErrRefused) {
+		t.Fatalf("refused again after the wait: %v", err)
+	}
+	if _, err := s.Stream(context.Background(), "4uLU6hMCjMI75M1A2tKUQC", 0, 160, false); !errors.Is(err, spotify.ErrRefused) {
+		t.Fatalf("refused, a stream: %v", err)
+	}
+	s.refusing = time.Now().Add(-time.Second)
+	if s.refusedOn(sess) {
+		t.Fatal("still refused once the while has passed")
+	}
+	if err := s.refusal(sess, key); !errors.Is(err, spotify.ErrRefused) || !s.refusedOn(sess) {
+		t.Fatalf("asked again and refused: %v", err)
+	}
+	if s.refusedOn(&session.Session{}) {
+		t.Fatal("another session's account was judged by this one's")
+	}
+}
+
+// Once a key has come, the account has keys: a refused key is Spotify's pause
+// after a burst of them, waited out.
+func TestARefusedKeyAfterAKeyIsAPause(t *testing.T) {
+	sess := &session.Session{}
+	s := &Librespot{log: slog.New(slog.DiscardHandler), sess: sess, premium: true}
+	key := fmt.Errorf("audio key: %w", &audio.KeyProviderError{Code: 1})
+	s.refusal(sess, key)
+	s.refused = s.refused.Add(-time.Hour)
+	s.gotKey(sess)
+	var th *spotify.Throttled
+	for i := range 3 {
+		if err := s.refusal(sess, key); !errors.As(err, &th) || th.Wait != spotify.KeyWait {
+			t.Fatalf("refusal %d after a key: %v", i, err)
+		}
 	}
 }
 
