@@ -4,6 +4,7 @@ package player
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -145,7 +146,105 @@ type Player struct {
 	cancelPrime context.CancelFunc
 	retryTimer  stopper // tries a refused stream again
 	primeTimer  stopper // opens the stream to follow once cur nears its end
+	gate        Gate    // refuses tracks of an integration switched off; nil lets all play
 }
+
+// Gate says whether t may play now, and if not, the integration switched off
+// that it belongs to, as "Spotify".
+type Gate func(t Track) (off string, ok bool)
+
+// SetGate makes the player ask g before it plays or primes a track. A track
+// it refuses is skipped as a stream that won't open is, with the notice
+// SwitchedOff; it stays in the queue, and plays once g lets it.
+func (p *Player) SetGate(g Gate) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.gate = g
+}
+
+// Regate asks the gate again, after a switch changed: the track waited on is
+// skipped if it is refused now, and the track to follow is primed again, so a
+// refused one isn't. What plays carries on.
+func (p *Player) Regate() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed || len(p.order) == 0 {
+		return
+	}
+	switch {
+	case p.waiting:
+		if off, ok := p.allowedLocked(p.queue[p.order[p.pos]]); !ok {
+			p.waiting = false
+			p.offLocked(off)
+		}
+	case p.cur != nil && !p.loading:
+		p.primeLocked()
+	}
+}
+
+// allowedLocked asks the gate about t.
+func (p *Player) allowedLocked(t Track) (string, bool) {
+	if p.gate == nil {
+		return "", true
+	}
+	return p.gate(t)
+}
+
+// offLocked skips the track at pos, which the gate refused, and any refused
+// after it, to the next the gate lets play, wrapping only with repeat all.
+// The listener hears once, for the whole run, whose switch is off. With
+// nothing left that may play, playback stops on the last track reached.
+func (p *Player) offLocked(off string) {
+	p.log.Info("skipping tracks switched off", "integration", off)
+	p.tellLocked(Notice{Kind: SwitchedOff, Off: off})
+	for range len(p.order) - 1 { // each other track once at most
+		switch {
+		case p.pos+1 < len(p.order):
+			p.pos++
+		case p.repeat == RepeatAll:
+			p.pos = 0
+		default:
+			p.cued = true // the queue's end: stop on its last track
+			return
+		}
+		if _, ok := p.allowedLocked(p.queue[p.order[p.pos]]); ok {
+			p.moveOnLocked()
+			return
+		}
+	}
+	p.cued = true // nothing in the queue may play: stop here
+}
+
+// waitCuedLocked waits, cued, for the pending track at pos to land, unless
+// the gate refuses it: then playback stays cued on it, and skips it when
+// played, rather than wait for a download that won't be fetched.
+func (p *Player) waitCuedLocked() {
+	if _, ok := p.allowedLocked(p.queue[p.order[p.pos]]); ok {
+		p.waiting = true // cued when it lands
+	}
+}
+
+// Switches is the gate of the integrations' switches: with Spotify off its
+// streams are refused, unless downloaded copies are preferred, when the
+// stream opener plays a copy or refuses with ErrSpotifyOff; with YouTube off,
+// tracks still waiting for their download are, as the queue is held. Files
+// always play.
+func Switches(spotifyOn, youtubeOn, copies func() bool) Gate {
+	return func(t Track) (string, bool) {
+		switch {
+		case t.Streamed() && !spotifyOn() && !copies():
+			return "Spotify", false
+		case t.Pending() && !youtubeOn():
+			return "YouTube", false
+		}
+		return "", true
+	}
+}
+
+// ErrSpotifyOff is what a stream opener returns for a Spotify track with no
+// downloaded copy while Spotify is switched off: the track is skipped with
+// the notice SwitchedOff.
+var ErrSpotifyOff = errors.New("spotify is switched off")
 
 // New creates a player that plays through out and opens files with open.
 func New(out audio.Output, open Opener, log *slog.Logger) *Player {
@@ -292,6 +391,10 @@ func (p *Player) startAtLocked(frame int64) {
 // many files in a row are tried when they won't open.
 func (p *Player) loadLocked(frame int64, tries int) {
 	t := p.queue[p.order[p.pos]]
+	if off, ok := p.allowedLocked(t); !ok {
+		p.offLocked(off)
+		return
+	}
 	switch {
 	case t.Pending():
 		p.waiting, p.startFrame = true, max(frame, 0)
@@ -407,6 +510,9 @@ func (p *Player) primeLocked() {
 	}
 	idx, gen, levelling, album := p.order[pos], p.gen, p.levelling, p.albumModeLocked()
 	t := p.queue[idx]
+	if _, ok := p.allowedLocked(t); !ok {
+		return // skipped when cur ends
+	}
 	if t.Pending() {
 		return // primed when it lands
 	}
@@ -535,6 +641,14 @@ func (p *Player) Prev() {
 	}
 	if p.pos > 0 && (p.cur == nil || p.elapsedLocked() <= restartAfter) {
 		p.pos--
+		// Back past the tracks the gate refuses, which playing would skip
+		// forward again, to where it started.
+		for p.pos > 0 {
+			if _, ok := p.allowedLocked(p.queue[p.order[p.pos]]); ok {
+				break
+			}
+			p.pos--
+		}
 	}
 	p.startLocked()
 }
@@ -754,7 +868,7 @@ func (p *Player) Drop(videoID string) int {
 		p.stopLocked()
 		p.cued, p.playedOut = true, false
 		if p.queue[p.order[p.pos]].Pending() {
-			p.waiting = true // cued when it lands
+			p.waitCuedLocked()
 			return
 		}
 		p.cueLocked()
@@ -1003,7 +1117,7 @@ func (p *Player) Restore(s Snapshot) bool {
 	// Kept even if the track won't open, so the next save doesn't lose the position.
 	p.cued, p.startFrame, p.playedOut = true, max(s.Frame, 0), false
 	if t.Pending() {
-		p.waiting = true // cued when it lands
+		p.waitCuedLocked()
 		return true
 	}
 	if t.Streamed() {

@@ -199,7 +199,7 @@ func (p *Player) sleepEndLocked() {
 	}
 	p.pos, p.cued, p.startFrame = pos, true, 0
 	if p.queue[p.order[p.pos]].Pending() {
-		p.waiting = true // cued when it lands
+		p.waitCuedLocked()
 		return
 	}
 	p.cueLocked()

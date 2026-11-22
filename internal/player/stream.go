@@ -18,6 +18,7 @@ type StreamOpener func(ctx context.Context, t Track, frame int64, level bool) (a
 type Notice struct {
 	Kind NoticeKind
 	Wait time.Duration // for Throttled, until the track is tried again
+	Off  string        // for SwitchedOff, the integration switched off
 }
 
 // NoticeKind is what a Notice is about.
@@ -42,6 +43,9 @@ const (
 	// NeedsPremium: a streamed track was skipped, Spotify streaming to
 	// Premium accounts alone.
 	NeedsPremium
+	// SwitchedOff: a track of an integration switched off was skipped (see
+	// SetGate); Off names the integration.
+	SwitchedOff
 	// Refused: a streamed track was skipped, Spotify giving the account no
 	// keys.
 	Refused
@@ -138,8 +142,10 @@ func (p *Player) refusedLocked(err error, frame int64) {
 		p.tellLocked(Notice{Kind: StillThrottled})
 	default:
 		// Moving on: the files in the queue still play.
-		kind := Failed
+		kind, off := Failed, ""
 		switch {
+		case errors.Is(err, ErrSpotifyOff):
+			kind, off = SwitchedOff, "Spotify"
 		case errors.Is(err, spotify.ErrUnavailable):
 			kind = Unavailable
 		case errors.Is(err, spotify.ErrOffline):
@@ -152,7 +158,7 @@ func (p *Player) refusedLocked(err error, frame int64) {
 			kind = Refused
 		}
 		p.log.Warn("skipping stream", "id", p.queue[p.order[p.pos]].SpotifyID, "err", err)
-		p.tellLocked(Notice{Kind: kind})
+		p.tellLocked(Notice{Kind: kind, Off: off})
 		p.failures++
 		// A stream cued while it loaded, paused by the listener or stopped on by
 		// the sleep timer, moves on but isn't played: the next track is cued in
