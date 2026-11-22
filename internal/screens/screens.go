@@ -79,8 +79,22 @@ func SetMusicPlace(place string) {
 	}
 }
 
+// downloadsOff is set while YouTube is switched off: there is no YouTube tab
+// to find music on, nor a Downloads tab to open. Only the UI thread reads and
+// sets it.
+var downloadsOff bool
+
+// SetDownloads says whether YouTube, with its Downloads tab, is switched on.
+func SetDownloads(on bool) { downloadsOff = !on }
+
+// DownloadsOn reports whether YouTube, with its Downloads tab, is switched on.
+func DownloadsOn() bool { return !downloadsOff }
+
 // EmptyLibraryText is what Home and the Library say when no music is indexed.
 func EmptyLibraryText() string {
+	if downloadsOff {
+		return "Copy music to " + musicPlace + "."
+	}
 	return "Copy music to " + musicPlace + ", or find something on YouTube Music."
 }
 

@@ -24,6 +24,8 @@ func noticeText(n player.Notice) string {
 		return "Spotify songs need Spotify Premium"
 	case player.Refused:
 		return "Spotify won’t stream to this account"
+	case player.SwitchedOff:
+		return n.Off + " is off"
 	}
 	return "Skipped a Spotify song that couldn’t play"
 }

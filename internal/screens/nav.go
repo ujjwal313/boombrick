@@ -1,6 +1,10 @@
 package screens
 
-import "time"
+import (
+	"time"
+
+	"github.com/ujjwal313/boombrick/internal/ui/widgets"
+)
 
 // AddedToQueue is the toast shown after something is added to the queue.
 const AddedToQueue = "Added to queue"
@@ -24,8 +28,8 @@ type Backer interface {
 	Back() bool
 }
 
-// DownloadsTab is the Downloads tab's place in the tab row.
-const DownloadsTab = 4
+// DownloadsTab is the Downloads tab's ID.
+const DownloadsTab = widgets.TabDownloads
 
 // Tabber is a Nav that can show another tab, as the app's does.
 type Tabber interface {
@@ -33,9 +37,10 @@ type Tabber interface {
 }
 
 // OpenDownloads shows the Downloads tab, as the offline screens' Open
-// Downloads does; it reports false when nav can't.
+// Downloads does; it reports false when nav can't, or YouTube is switched off.
 func OpenDownloads(nav Nav) bool {
 	t, ok := nav.(Tabber)
+	ok = ok && DownloadsOn()
 	if ok {
 		t.ShowTab(DownloadsTab)
 	}

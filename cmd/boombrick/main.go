@@ -174,7 +174,9 @@ func run(started time.Time) error {
 	qjs := quickJS(dir)
 	dl, err := download.New(download.Options{DB: db.DB, Music: paths.Music, Data: paths.Data, QJS: qjs,
 		HTTP: web, Albums: ytc, Lyrics: lyrics.NewClient(web), Formats: formats, Online: online,
-		Quality: func() string { return prefs.String(settings.DownloadQuality) }, Log: log})
+		Quality: func() string { return prefs.String(settings.DownloadQuality) }, Log: log,
+		// With YouTube switched off, nothing queued is fetched.
+		Hold: !prefs.Bool(settings.YouTubeOn)})
 	if err != nil {
 		return err
 	}
@@ -186,7 +188,8 @@ func run(started time.Time) error {
 	// Music, a search a second, and downloading the matches. The importer
 	// closes before the queue it fills.
 	im, err := importer.New(importer.Options{DB: db.DB, Search: ytc.Search, Get: dl.Get, State: dl.State,
-		Remove: dl.Remove, Online: online, Log: log})
+		Remove: dl.Remove, Online: online, Log: log,
+		Off: !prefs.Bool(settings.SpotifyOn) || !prefs.Bool(settings.YouTubeOn)})
 	if err != nil {
 		return err
 	}
@@ -402,6 +405,8 @@ func run(started time.Time) error {
 		Notices:       notices,
 		Spotify:       spLib,
 		Importer:      im,
+		Hold:          dl.SetHeld,
+		ImportOn:      im.SetEnabled,
 		Background: func() error {
 			exe, err := os.Executable()
 			if err != nil {

@@ -8,10 +8,11 @@ import (
 	spotifyscreen "github.com/ujjwal313/boombrick/internal/screens/spotify"
 	keys "github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/spotify"
+	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
-// spotifyTab is the Spotify tab's place in the tab row.
-const spotifyTab = 2
+// spotifyTab is the Spotify tab's ID.
+const spotifyTab = widgets.TabSpotify
 
 // Spotify is the Spotify library: the tab's, Home's row's and Settings'.
 // *spotify.Library is one.
@@ -34,7 +35,7 @@ type Importer interface {
 // spotifyEnv is what the Spotify screens work with. Importing needs the
 // download queue as well as the importer.
 func (a *App) spotifyEnv() *spotifyscreen.Env {
-	e := &spotifyscreen.Env{Nav: a, Src: a.opts.Spotify, Player: a.opts.Player,
+	e := &spotifyscreen.Env{Nav: a, Src: a.opts.Spotify, Player: a.opts.Player, Importing: a.youtubeOn,
 		Online: func() bool { return a.ui.Status.Online }}
 	if a.opts.Importer == nil || a.opts.Downloads == nil {
 		return e
@@ -75,8 +76,12 @@ func (a *App) importPlaylist(p spotify.Playlist) {
 	a.Push(spotifyscreen.NewReview(a.env, []spotify.Playlist{p}, true))
 }
 
-// signIn opens the sign-in on the Spotify tab, over anything open.
+// signIn opens the sign-in on the Spotify tab, over anything open; with
+// Spotify switched off, nothing.
 func (a *App) signIn() {
+	if !a.spotifyOn() {
+		return
+	}
 	a.shell.showTab(spotifyTab, time.Now())
 	a.Push(spotifyscreen.NewSignIn(a.env))
 }
@@ -96,9 +101,11 @@ func (a *App) spotifyNews() {
 }
 
 // notice shows the player's news: a toast, or for an expired session the
-// dialog that offers to sign in again, once until signed in again.
+// dialog that offers to sign in again, once until signed in again. With
+// Spotify switched off there is no tab to sign in on, so a stream that was
+// opening as it was switched off says so with a toast.
 func (a *App) notice(n player.Notice, now time.Time) {
-	if n.Kind != player.SignedOut || a.expired == nil {
+	if n.Kind != player.SignedOut || a.expired == nil || !a.spotifyOn() {
 		a.Toast(noticeText(n))
 		return
 	}

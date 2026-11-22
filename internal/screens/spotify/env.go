@@ -44,6 +44,9 @@ type Env struct {
 	Copies func(id string) bool
 	// Online reports the Wi-Fi; nil counts as online.
 	Online func() bool
+	// Importing reports whether importing is switched on, which takes YouTube
+	// to find and download the songs; nil counts as on.
+	Importing func() bool
 	// Estimate is the download quality's MB per hour, and the SD card's free
 	// space, for the size of an import.
 	Estimate func() (mbPerHour float64, free int64)
@@ -53,9 +56,11 @@ type Env struct {
 
 func (e *Env) online() bool { return e.Online == nil || e.Online() }
 
-// CanImport says whether an import may start: with importing, while online.
-// Offline, matching would only wait, so nothing offers one.
-func (e *Env) CanImport() bool { return e.Import != nil && e.online() }
+// CanImport says whether an import may start: with importing, switched on,
+// while online. Offline, matching would only wait, so nothing offers one.
+func (e *Env) CanImport() bool {
+	return e.Import != nil && e.online() && (e.Importing == nil || e.Importing())
+}
 
 func (e *Env) has(id string) bool { return e.Copies != nil && e.Copies(id) }
 

@@ -42,6 +42,7 @@ var (
 	signInHints    = []widgets.Hint{{Key: "A", Label: "Sign in"}, tabsHint}
 	failedHints    = []widgets.Hint{retryHint, tabsHint}
 	offlineHints   = []widgets.Hint{{Key: "A", Label: "Open Downloads"}, tabsHint}
+	tabsHints      = []widgets.Hint{tabsHint}
 )
 
 // Tab is the Spotify tab: signed out, a card that opens the sign-in; signed
@@ -210,10 +211,16 @@ func (t *Tab) Draw(u *ui.Context) {
 	st, err, listErr := t.st, t.err, t.listErr
 	if t.offline {
 		widgets.DrawBackground(u, widgets.StateGround)
-		widgets.OfflineState(u, &t.off, "Spotify needs Wi-Fi or a hotspot — your downloads still play.")
+		// With YouTube off there is no Downloads tab to open.
+		dl := screens.DownloadsOn()
+		widgets.OfflineState(u, &t.off, "Spotify needs Wi-Fi or a hotspot — your downloads still play.", dl)
 		widgets.StatusBar(u)
 		widgets.Tabs(u, tab)
-		widgets.HintBar(u, offlineHints)
+		if dl {
+			widgets.HintBar(u, offlineHints)
+		} else {
+			widgets.HintBar(u, tabsHints)
+		}
 		return
 	}
 	widgets.DrawBackground(u, widgets.TabGround)
@@ -229,7 +236,7 @@ func (t *Tab) Draw(u *ui.Context) {
 		hints = signInHints
 	case st.State == "":
 		message(u, &t.msg, "Loading…", content)
-		hints = []widgets.Hint{tabsHint}
+		hints = tabsHints
 	default:
 		t.drawLibrary(u, st, listErr)
 		hints = libraryHints

@@ -48,17 +48,20 @@ const offlineWidth = 700
 
 // OfflineState draws the offline state centred between the tabs and the hint
 // bar: the Wi-Fi-off icon in a gold circle, "You’re offline", body wrapped in
-// ink2, and an Open Downloads pill, focused. As the state ground is, it is
-// drawn in the fallback gold, whatever the album playing. The screen keeps
-// body's lines in c.
-func OfflineState(u *ui.Context, c *Wrapped, body string) {
+// ink2, and, with pill, an Open Downloads pill, focused. As the state ground
+// is, it is drawn in the fallback gold, whatever the album playing. The
+// screen keeps body's lines in c.
+func OfflineState(u *ui.Context, c *Wrapped, body string, pill bool) {
 	const circle, icon = 96, 46
 	accent := u.Accent
 	u.Accent = theme.Fallback()
 	defer func() { u.Accent = accent }()
 	lines := c.Lines(u, body, stateBody, offlineWidth)
 	titleH, bodyH := u.LineHeight(stateTitle), u.LineHeight(stateBody)
-	h := circle + 24 + titleH + 12 + float32(len(lines))*bodyH + 28 + PillHeight
+	h := circle + 24 + titleH + 12 + float32(len(lines))*bodyH
+	if pill {
+		h += 28 + PillHeight
+	}
 	top := float32(StatusHeight + TabsHeight)
 	y := top + (theme.ScreenH-HintsHeight-top-h)/2
 	x := float32(theme.ScreenW-circle) / 2
@@ -71,6 +74,9 @@ func OfflineState(u *ui.Context, c *Wrapped, body string) {
 	for _, l := range lines {
 		u.Text(l, stateBody, (theme.ScreenW-u.TextWidth(l, stateBody))/2, y, theme.Ink2)
 		y += bodyH
+	}
+	if !pill {
+		return
 	}
 	y += 28
 	px := (theme.ScreenW - PillWidth(u, "download", openDownloads)) / 2

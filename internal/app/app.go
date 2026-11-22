@@ -38,6 +38,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/gfx"
 	"github.com/ujjwal313/boombrick/internal/ui/text"
+	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
 // Options configure the app.
@@ -129,6 +130,11 @@ type Options struct {
 	// it plays; the app then quits. Without it the quick menu has no Play in
 	// background.
 	Background func() error
+	// Hold holds the download queue while YouTube is switched off, and
+	// ImportOn switches the importer, on while Spotify and YouTube both are.
+	// The app calls them as it starts and each time a switch changes.
+	Hold     func(on bool)
+	ImportOn func(on bool)
 }
 
 // Releases is what the app needs from a release checker. *release.Checker
@@ -392,7 +398,7 @@ func New(opts Options) (*App, error) {
 	if opts.MusicDir != "" {
 		screens.SetDownloadsDir(filepath.Join(opts.MusicDir, "Boombrick"))
 	}
-	var ytTab, dlTab screens.Screen = &screens.Placeholder{Tab: 3, Title: "YouTube"}, &screens.Placeholder{Tab: 4, Title: "Downloads"}
+	var ytTab, dlTab screens.Screen = &screens.Placeholder{Tab: widgets.TabYouTube, Title: "YouTube"}, &screens.Placeholder{Tab: widgets.TabDownloads, Title: "Downloads"}
 	var acts youtube.Downloads // stays nil without a queue
 	if opts.Downloads != nil {
 		acts = ytActions{dl: opts.Downloads, p: opts.Player, toast: a.Toast}
@@ -425,6 +431,7 @@ func New(opts Options) (*App, error) {
 		a.forward(opts.Lyrics.Ready(), &a.redraw)
 	}
 	a.shell.menu = a.quickMenu()
+	a.applySwitches()
 	return a, nil
 }
 
@@ -462,6 +469,7 @@ func (a *App) quickMenu() *quickmenu.Menu {
 			o.Spotify = a.opts.Spotify
 			o.Copies = a.env.Import != nil
 		}
+		o.Integrations, o.Switched = a.integrations(), a.switched
 		at := a.shell.add(overlay{button: input.None, screen: settingsscreen.New(o)})
 		act.OpenSettings = func() { a.shell.openOverlay(at, time.Now()) }
 	}
@@ -749,9 +757,9 @@ func (a *App) showHome(progress []resume.Progress) {
 	if row, ok := home.ContinueRow(progress, a.ix, a.resumeAlbum, a.queueAlbum); ok {
 		rows = append(rows, row)
 	}
-	if a.opts.Spotify != nil {
+	if a.opts.Spotify != nil && a.spotifyOn() {
 		var imp func(spotify.Playlist)
-		if a.env.Import != nil {
+		if a.env.Import != nil && a.youtubeOn() {
 			imp = a.importPlaylist
 		}
 		if row, ok := home.SpotifyRow(a.playlists, a.openPlaylist, imp); ok {

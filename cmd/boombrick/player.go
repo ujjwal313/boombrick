@@ -32,6 +32,9 @@ func newPlayer(db *sql.DB, prefs *settings.Settings, sp *spotify.Helper, online 
 				return decode.Open(path)
 			}
 		}
+		if !prefs.Bool(settings.SpotifyOn) {
+			return nil, player.ErrSpotifyOff // the gate let it by for a copy, and there is none
+		}
 		if !online() {
 			return nil, spotify.ErrOffline
 		}
@@ -41,6 +44,11 @@ func newPlayer(db *sql.DB, prefs *settings.Settings, sp *spotify.Helper, online 
 		}
 		return s, nil
 	}, notify)
+	// The integrations switched off: the app's player and the background
+	// player refuse the same tracks.
+	p.SetGate(player.Switches(func() bool { return prefs.Bool(settings.SpotifyOn) },
+		func() bool { return prefs.Bool(settings.YouTubeOn) },
+		func() bool { return prefs.Bool(settings.PreferDownloaded) }))
 	return p
 }
 

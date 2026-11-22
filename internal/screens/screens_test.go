@@ -14,3 +14,29 @@ func TestEmptyLibraryText(t *testing.T) {
 		t.Fatalf("default: %q, want %q", got, want)
 	}
 }
+
+// tabber records the tabs asked for.
+type tabber struct{ shown []int }
+
+func (t *tabber) Push(Screen)     {}
+func (t *tabber) Pop()            {}
+func (t *tabber) Toast(string)    {}
+func (t *tabber) ShowTab(tab int) { t.shown = append(t.shown, tab) }
+
+// With YouTube switched off the empty library doesn't send anyone to it, and
+// nothing opens the Downloads tab.
+func TestWithoutYouTube(t *testing.T) {
+	t.Cleanup(func() { SetDownloads(true) })
+	SetDownloads(false)
+	if got, want := EmptyLibraryText(), "Copy music to the Music folder on the SD card."; got != want {
+		t.Fatalf("empty library: %q, want %q", got, want)
+	}
+	var tb tabber
+	if OpenDownloads(&tb) || len(tb.shown) != 0 {
+		t.Fatalf("opened Downloads with YouTube off: %v", tb.shown)
+	}
+	SetDownloads(true)
+	if !OpenDownloads(&tb) || len(tb.shown) != 1 || tb.shown[0] != DownloadsTab {
+		t.Fatalf("with YouTube on: %v", tb.shown)
+	}
+}
