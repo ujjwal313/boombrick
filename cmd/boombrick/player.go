@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"time"
 
 	"github.com/ujjwal313/boombrick/internal/audio"
 	"github.com/ujjwal313/boombrick/internal/audio/alsa"
@@ -13,15 +15,20 @@ import (
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/platform"
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/radio"
 	"github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/spotify"
 )
 
+// errOffline is why a station wouldn't open with no network connection.
+var errOffline = errors.New("offline")
+
 // newPlayer makes the player both of Boombrick's modes play with: files
-// through ALSA, and Spotify songs from a downloaded copy when Prefer
-// downloaded copies is on and there is one, or else streamed through the
-// helper. notify hears the player's news about streaming.
-func newPlayer(db *sql.DB, prefs *settings.Settings, sp *spotify.Helper, online func() bool, log *slog.Logger,
+// through ALSA, Spotify songs from a downloaded copy when Prefer downloaded
+// copies is on and there is one, or else streamed through the helper, and
+// radio stations. rc may be nil, which only means no clicks are sent. notify
+// hears the player's news about streaming.
+func newPlayer(db *sql.DB, prefs *settings.Settings, sp *spotify.Helper, rc *radio.Client, online func() bool, log *slog.Logger,
 	notify func(player.Notice)) *player.Player {
 	p := player.New(alsa.New(log), decode.Open, log)
 	p.SetLevelling(prefs.Bool(settings.VolumeLevelling))
@@ -44,6 +51,28 @@ func newPlayer(db *sql.DB, prefs *settings.Settings, sp *spotify.Helper, online 
 		}
 		return s, nil
 	}, notify)
+	streams := radio.StreamClient()
+	p.SetLive(func(ctx context.Context, t player.Track) (audio.Source, error) {
+		if !online() {
+			return nil, errOffline
+		}
+		l, err := radio.Open(ctx, t.Stream, radio.Options{HTTP: streams, Online: online, Name: t.Title, Log: log})
+		if err != nil {
+			return nil, err // not l: a nil *Live isn't a nil Source
+		}
+		if rc != nil && t.StationID != "" {
+			// Radio Browser counts a click each time a station starts, so the
+			// ones people listen to rise in Top. Nothing waits on it.
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := rc.Click(ctx, t.StationID); err != nil {
+					log.Info("radio click", "err", err)
+				}
+			}()
+		}
+		return l, nil
+	})
 	// The integrations switched off: the app's player and the background
 	// player refuse the same tracks.
 	p.SetGate(player.Switches(func() bool { return prefs.Bool(settings.SpotifyOn) },

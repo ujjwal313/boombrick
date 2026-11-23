@@ -20,6 +20,10 @@ func TestNoticeTexts(t *testing.T) {
 		{player.Notice{Kind: player.SignedOut}, "Spotify session expired"},
 		{player.Notice{Kind: player.NeedsPremium}, "Spotify songs need Spotify Premium"},
 		{player.Notice{Kind: player.Refused}, "Spotify won’t stream to this account"},
+		{player.Notice{Kind: player.CouldNotPlay, Name: "Radio X"}, "Couldn’t play Radio X"},
+		{player.Notice{Kind: player.Lost, Name: "Radio X"}, "Lost Radio X"},
+		{player.Notice{Kind: player.SleepTimerOff}, "Sleep timer off"},
+		{player.Notice{Kind: player.SwitchedOff, Off: "Radio"}, "Radio is off"},
 	} {
 		if got := noticeText(c.n); got != c.want {
 			t.Errorf("%+v: %q, want %q", c.n, got, c.want)

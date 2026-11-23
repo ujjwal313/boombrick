@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/perf"
 	"github.com/ujjwal313/boombrick/internal/platform"
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/radio"
 	"github.com/ujjwal313/boombrick/internal/release"
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/selfupdate"
@@ -124,6 +126,7 @@ func run(started time.Time) error {
 	// music is looked up online while the device is. They close after the
 	// player, so the music stops at once on quitting, and before the database.
 	web := netx.NewClient()
+	rc := radio.NewClient(web, net.DefaultResolver)
 	covers := art.New(art.Options{
 		DB:     db.DB,
 		Dir:    filepath.Join(paths.Data, "cache", "art"),
@@ -236,7 +239,7 @@ func run(started time.Time) error {
 	defer spLib.Close()
 
 	notices := make(chan player.Notice, 8)
-	p := newPlayer(db.DB, prefs, sp, online, log, func(n player.Notice) {
+	p := newPlayer(db.DB, prefs, sp, rc, online, log, func(n player.Notice) {
 		select {
 		case notices <- n:
 		default: // a burst of them: the toast shows the latest anyway

@@ -343,7 +343,7 @@ func (w testLog) Write(b []byte) (int, error) {
 // files never reach the Spotify helper.
 func (r *rig) player(st *store.Store, prefs *settings.Settings) (*player.Player, func()) {
 	sp := spotify.NewHelper(filepath.Join(r.data, "no-such-helper"), filepath.Join(r.data, "spotify"), r.log(), io.Discard)
-	p := newPlayer(st.DB, prefs, sp, func() bool { return false }, r.log(), func(player.Notice) {})
+	p := newPlayer(st.DB, prefs, sp, nil, func() bool { return false }, r.log(), func(player.Notice) {})
 	var once sync.Once
 	closeP := func() { once.Do(func() { p.Close(); sp.Close() }) }
 	r.t.Cleanup(closeP)
