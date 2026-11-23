@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding/charmap"
@@ -121,5 +122,11 @@ func streamTitle(b []byte) (string, bool) {
 	if !utf8.Valid(v) {
 		v, _ = charmap.ISO8859_1.NewDecoder().Bytes(v)
 	}
-	return strings.TrimSpace(string(v)), true
+	t := strings.TrimSpace(string(v))
+	// Many servers send " - " between songs, an artist and a song with nothing
+	// in them. A title with no letter or digit isn't one.
+	if !strings.ContainsFunc(t, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+		t = ""
+	}
+	return t, true
 }

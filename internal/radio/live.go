@@ -95,9 +95,10 @@ type Live struct {
 
 	mu      sync.Mutex
 	ring    []float32
-	r, n    int   // where the next sample is read, and how many are held
-	err     error // the stream failed for good
-	stalled bool  // the stream dropped, and is being connected again
+	r, n    int       // where the next sample is read, and how many are held
+	err     error     // the stream failed for good
+	stalled bool      // the stream dropped, and is being connected again
+	dry     time.Time // when Read first found the ring empty; zero while it holds audio, and once the stream has ended
 	closed  bool
 	title   string
 	kbps    int
@@ -297,6 +298,7 @@ func (l *Live) run(ctx context.Context, c conn) {
 		}
 		l.mu.Lock()
 		l.stalled = true
+		l.title = "" // it was the last connection's
 		l.mu.Unlock()
 		l.o.Log.Info("station dropped", "station", l.o.Name, "err", err)
 		if l.heard.Sub(from) >= steady {
@@ -432,11 +434,12 @@ func (l *Live) putLocked(b []float32) int {
 }
 
 // fail ends the stream with err, which Read returns once what is held is
-// read.
+// read. A stream that has ended isn't stalled, however long the ring has been
+// empty.
 func (l *Live) fail(err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.err, l.stalled = err, false
+	l.err, l.stalled, l.dry = err, false, time.Time{}
 	signal(l.more)
 }
 
@@ -477,8 +480,12 @@ func (l *Live) Read(buf []float32) (int, error) {
 	case l.closed:
 		return 0, io.EOF
 	case l.n == 0:
+		if l.dry.IsZero() && l.err == nil {
+			l.dry = time.Now()
+		}
 		return 0, l.err
 	}
+	l.dry = time.Time{}
 	k := min(len(buf)/2, l.n/2)
 	c := copy(buf[:2*k], l.ring[l.r:])
 	copy(buf[c:2*k], l.ring)
@@ -487,11 +494,13 @@ func (l *Live) Read(buf []float32) (int, error) {
 	return k, nil
 }
 
-// Stalled reports whether the stream dropped and is being connected again.
+// Stalled reports whether the stream dropped and is being connected again, or
+// has given no audio for a second: a connection gone quiet shows before the
+// watchdog drops it.
 func (l *Live) Stalled() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.stalled
+	return l.stalled || !l.dry.IsZero() && time.Since(l.dry) >= time.Second
 }
 
 // Kbps is the bitrate the server gives, 0 when it gives none.
@@ -521,7 +530,7 @@ func (l *Live) Title() string {
 func (l *Live) Close() error {
 	l.cancel() // first, so the goroutine finds its context done once it sees closed
 	l.mu.Lock()
-	l.closed = true
+	l.closed, l.dry = true, time.Time{}
 	l.mu.Unlock()
 	signal(l.more)
 	signal(l.space)

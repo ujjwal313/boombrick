@@ -57,10 +57,6 @@ func (d *mp3Decoder) next(dst []float32) (int, int, error) {
 		d.start += used
 	case d.err != nil:
 		return 0, 0, d.err // the stream ended in the middle of a frame
-	case d.end-d.start == len(d.buf):
-		d.start = d.end - 3 // no frame in all of it; a header may start in the last bytes
-	default:
-		d.fill(d.end - d.start + 1) // a frame starts here but isn't all there
 	}
 	return n, rate, nil
 }

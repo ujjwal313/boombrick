@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -578,6 +579,125 @@ func TestKbpsOf(t *testing.T) {
 	for in, want := range map[string]int{"128": 128, "128,128": 128, " 64 ": 64, "": 0, "x": 0} {
 		if got := kbpsOf(in); got != want {
 			t.Errorf("kbpsOf(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+// A station that keeps its connection but sends nothing is stalled once Read
+// has found the ring empty for a second, well before the watchdog drops it,
+// and isn't once audio comes again.
+func TestLiveStalledWhileQuiet(t *testing.T) {
+	file := fixtureBytes(t, "stream-44100.mp3")
+	s := serve(t, reply{file: file, header: mpeg, cut: 64 << 10, hang: true})
+	l := open(t, s.url, quick(time.Minute, time.Second)) // the watchdog is 15 s away
+	buf := make([]float32, 2*1024)
+	start := time.Now()
+	for deadline := start.Add(5 * time.Second); !l.Stalled(); {
+		if time.Now().After(deadline) {
+			t.Fatal("not stalled 5 s into a quiet connection")
+		}
+		if _, err := l.Read(buf); err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+	}
+	if d := time.Since(start); d > 12*time.Second {
+		t.Errorf("stalled after %v, want before the watchdog", d)
+	}
+	l.mu.Lock()
+	l.putLocked(make([]float32, 2*1024)) // audio comes
+	l.mu.Unlock()
+	if _, err := l.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	if l.Stalled() {
+		t.Error("still stalled once audio came")
+	}
+}
+
+// A stream that failed, or was closed, isn't stalled, however long Read had
+// found the ring empty: there is nothing more to wait for.
+func TestLiveEndedIsntStalled(t *testing.T) {
+	file := fixtureBytes(t, "stream-44100.mp3")
+	for _, end := range []struct {
+		name string
+		do   func(l *Live)
+	}{
+		{"failed", func(l *Live) {
+			l.fail(ErrLost)
+			failure(t, l, time.Second) // Read once more on the empty ring
+		}},
+		{"closed", func(l *Live) { l.Close() }},
+	} {
+		t.Run(end.name, func(t *testing.T) {
+			s := serve(t, reply{file: file, header: mpeg, cut: 64 << 10, hang: true})
+			l := open(t, s.url, quick(time.Minute, time.Second))
+			l.mu.Lock()
+			l.dry = time.Now().Add(-2 * time.Second) // Read found the ring empty two seconds ago
+			l.mu.Unlock()
+			if !l.Stalled() {
+				t.Fatal("not stalled two seconds into an empty ring")
+			}
+			end.do(l)
+			l.mu.Lock()
+			dry := l.dry
+			l.mu.Unlock()
+			if l.Stalled() || !dry.IsZero() {
+				t.Errorf("%s, Stalled() = %v, with the ring empty since %v", end.name, l.Stalled(), dry)
+			}
+		})
+	}
+}
+
+// A drop clears the title, and a stream that comes back with none keeps it
+// cleared.
+func TestLiveDropClearsTheTitle(t *testing.T) {
+	file := fixtureBytes(t, "stream-44100.mp3")
+	s := serve(t, reply{file: file, header: mpeg, metaint: 8192, title: "Artist - Song", cut: 64 << 10},
+		reply{file: file, header: mpeg})
+	l := open(t, s.url, quick(time.Minute, 200*time.Millisecond))
+	buf := make([]float32, 2*1024)
+	for deadline := time.Now().Add(5 * time.Second); !l.Stalled(); {
+		if time.Now().After(deadline) {
+			t.Fatal("the station didn't drop")
+		}
+		if _, err := l.Read(buf); err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+	}
+	if got := l.Title(); got != "" {
+		t.Errorf("Title() after the drop = %q, want none", got)
+	}
+	play(t, l, 44100)
+	if got := l.Title(); got != "" {
+		t.Errorf("Title() after the reconnect = %q, want none", got)
+	}
+}
+
+// While Online reports false, a dropped station isn't asked again.
+func TestLiveOfflineSkipsTries(t *testing.T) {
+	file := fixtureBytes(t, "stream-44100.mp3")
+	s := serve(t, reply{file: file, header: mpeg, cut: 64 << 10}, reply{file: file, header: mpeg})
+	var online atomic.Bool
+	o := quick(time.Minute, 20*time.Millisecond)
+	o.Online = online.Load
+	l := open(t, s.url, o)
+	buf := make([]float32, 2*1024)
+	for deadline := time.Now().Add(5 * time.Second); !l.Stalled(); {
+		if time.Now().After(deadline) {
+			t.Fatal("the station didn't drop")
+		}
+		if _, err := l.Read(buf); err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+	}
+	time.Sleep(300 * time.Millisecond) // many tries' worth
+	if n := s.requests(); n != 1 {
+		t.Fatalf("%d requests while offline, want 1", n)
+	}
+	online.Store(true)
+	for deadline := time.Now().Add(5 * time.Second); s.requests() < 2; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no try once online")
 		}
 	}
 }

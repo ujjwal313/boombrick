@@ -508,3 +508,27 @@ func TestStateShowsTheStationsTitleAndFormat(t *testing.T) {
 		t.Fatalf("title %q, format %q; want the stream's", st.LiveTitle, st.Format)
 	}
 }
+
+// A station never ends, so a sleep timer for the end of a track or an album
+// would never fire: it leaves the timer as it was. Timed modes still set.
+func TestSleepAtTheEndNeedsNoStation(t *testing.T) {
+	p, _, _, _, _ := radioPlayer(t, nil)
+	p.Play(stations("a"), 0)
+	eventually(t, "a to play", func() bool { return onAir(p, 0) })
+	p.SetSleep(Sleep30)
+	want := p.Sleep()
+	for _, m := range []SleepMode{SleepTrack, SleepAlbum} {
+		p.SetSleep(m)
+		if got := p.Sleep(); got != want {
+			t.Errorf("SetSleep(%d) on a station: sleep = %+v, want %+v", m, got, want)
+		}
+		p.ResumeSleep(Sleep{Mode: m})
+		if got := p.Sleep(); got != want {
+			t.Errorf("ResumeSleep(%d) on a station: sleep = %+v, want %+v", m, got, want)
+		}
+	}
+	p.SetSleep(Sleep15)
+	if got := p.Sleep(); got.Mode != Sleep15 {
+		t.Errorf("sleep = %+v, want Sleep15 to set on a station", got)
+	}
+}

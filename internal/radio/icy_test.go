@@ -148,6 +148,12 @@ func TestStreamTitle(t *testing.T) {
 		{"spaces", "StreamTitle='  A - B  ';\x00\x00", "A - B", true},
 		{"empty", "StreamTitle='';", "", true},
 		{"none", "StreamUrl='x';\x00\x00", "", false},
+		{"placeholder dash", "StreamTitle=' - ';", "", true},
+		{"lone hyphen", "StreamTitle='-';", "", true},
+		{"two hyphens", "StreamTitle=' -- ';", "", true},
+		{"dots", "StreamTitle='...';", "", true},
+		{"artist and song", "StreamTitle='A - B';", "A - B", true},
+		{"a digit", "StreamTitle='1';", "1", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

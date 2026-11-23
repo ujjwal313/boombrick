@@ -51,6 +51,9 @@ func afterFunc(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) 
 func (p *Player) SetSleep(m SleepMode) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if (m == SleepTrack || m == SleepAlbum) && p.liveLocked() {
+		return // a station never ends, so neither would wait
+	}
 	atEnd := p.sleep.Mode == SleepTrack || p.sleep.Mode == SleepAlbum
 	p.stopSleepLocked()
 	p.sleep = Sleep{Mode: m}
