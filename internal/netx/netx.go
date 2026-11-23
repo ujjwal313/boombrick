@@ -40,6 +40,29 @@ type lazyTransport func() *http.Transport
 
 func (t lazyTransport) RoundTrip(r *http.Request) (*http.Response, error) { return t().RoundTrip(r) }
 
+// CloseIdleConnections closes the transport's idle connections, so that the
+// client's method of that name does what it says. It makes the transport if
+// no request has.
+func (t lazyTransport) CloseIdleConnections() { t().CloseIdleConnections() }
+
+// NewClientWith returns a client set up as NewClient's, with a transport of
+// its own that passes each connection through wrap as it is made, under TLS
+// when there is TLS. Its transport too is made on the first request.
+func NewClientWith(wrap func(net.Conn) net.Conn) *http.Client {
+	return &http.Client{Transport: lazyTransport(sync.OnceValue(func() *http.Transport {
+		t := newTransport()
+		dial := t.DialContext
+		t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := dial(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return wrap(c), nil
+		}
+		return t
+	}))}
+}
+
 func newTransport() *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext

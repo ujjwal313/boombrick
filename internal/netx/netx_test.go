@@ -6,12 +6,14 @@ import (
 	"crypto/x509"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -115,6 +117,28 @@ func TestTLSChecksTheRoots(t *testing.T) {
 	roots = func() *x509.CertPool { return pool }
 	if body, err := Get(ctx, NewClient(), srv.URL, 100); err != nil || string(body) != "secure" {
 		t.Fatalf("with its certificate among the roots: %q, %v", body, err)
+	}
+}
+
+// A client whose connections are wrapped reads the CA certificates on its
+// first request, as NewClient's does, not when it is made: a run that never
+// plays a station shouldn't pay for them.
+func TestNewClientWithReadsTheRootsOnItsFirstRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("hello")) }))
+	defer srv.Close()
+	var read, wrapped atomic.Int32
+	defer func(r func() *x509.CertPool) { roots = r }(roots)
+	roots = func() *x509.CertPool { read.Add(1); return x509.NewCertPool() }
+	c := NewClientWith(func(c net.Conn) net.Conn { wrapped.Add(1); return c })
+	if read.Load() != 0 {
+		t.Fatal("the certificates were read before any request")
+	}
+	if body, err := Get(context.Background(), c, srv.URL, 100); err != nil || string(body) != "hello" {
+		t.Fatalf("Get = %q, %v", body, err)
+	}
+	if read.Load() != 1 || wrapped.Load() != 1 {
+		t.Fatalf("after a request: certificates read %d times, %d connections wrapped; want 1 and 1",
+			read.Load(), wrapped.Load())
 	}
 }
 
