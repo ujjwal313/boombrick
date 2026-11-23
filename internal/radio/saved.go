@@ -6,10 +6,11 @@ import (
 	"time"
 )
 
-// Saved lists the saved stations, the latest saved first.
+// Saved lists the saved stations, the latest saved first and
+// those saved at the same moment by name.
 func Saved(db *sql.DB) ([]Station, error) {
 	rows, err := db.Query(`SELECT id, name, url, logo, country, country_code, codec, bitrate, tags
-		FROM stations ORDER BY saved DESC`)
+		FROM stations ORDER BY saved DESC, name`)
 	if err != nil {
 		return nil, err
 	}

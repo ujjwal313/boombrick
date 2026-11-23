@@ -15,8 +15,9 @@ import (
 	"github.com/ujjwal313/boombrick/internal/netx"
 )
 
-// rb is a fake Radio Browser server: it records the requests it gets and
-// answers each path from body, or with status when that is set.
+// rb is a fake Radio Browser server: it records the requests it gets, with
+// their paths as sent, and answers each path from body, or with status when
+// that is set.
 type rb struct {
 	srv    *httptest.Server
 	mu     sync.Mutex
@@ -33,7 +34,7 @@ func newRB(t *testing.T, status int, body map[string]string) *rb {
 			t.Errorf("no user agent on %s", r.URL)
 		}
 		s.mu.Lock()
-		s.asked = append(s.asked, r.URL.Path+"?"+r.URL.RawQuery)
+		s.asked = append(s.asked, r.URL.EscapedPath()+"?"+r.URL.RawQuery)
 		s.mu.Unlock()
 		if s.status != 0 {
 			w.WriteHeader(s.status)
@@ -248,6 +249,74 @@ func TestClick(t *testing.T) {
 	}
 	if a := s.requests(); len(a) != 1 || !strings.HasPrefix(a[0], "/json/url/u1") {
 		t.Fatalf("asked %v", a)
+	}
+}
+
+// The station's ID is escaped in the path, so it can't end the path or
+// start a query.
+func TestClickEscapesTheID(t *testing.T) {
+	s := newRB(t, 0, map[string]string{"/json/url/a/b c?d": `{"ok":true}`})
+	c, _ := clientFor(s)
+	if err := c.Click(context.Background(), "a/b c?d"); err != nil {
+		t.Fatal(err)
+	}
+	if path, q := s.query(t, 0); path != "/json/url/a%2Fb%20c%3Fd" || len(q) != 0 {
+		t.Fatalf("asked %s %v", path, q)
+	}
+}
+
+// Each search keeps at most its limit of the stations Radio Browser sends.
+func TestSearchesKeepTheirLimits(t *testing.T) {
+	var parts []string
+	for i := range 400 {
+		parts = append(parts, fmt.Sprintf(`{"stationuuid":"u%d","name":"Station %d","url_resolved":"http://s%d.example","codec":"MP3"}`, i, i, i))
+	}
+	body := "[" + strings.Join(parts, ",") + "]"
+	ctx := context.Background()
+	tests := []struct {
+		name string
+		call func(*Client) ([]Station, error)
+		keep int
+	}{
+		{"top", func(c *Client) ([]Station, error) { return c.Top(ctx) }, 100},
+		{"name", func(c *Client) ([]Station, error) { return c.Search(ctx, "station") }, 100},
+		{"country", func(c *Client) ([]Station, error) { return c.ByCountry(ctx, "IN") }, 300},
+		{"tag", func(c *Client) ([]Station, error) { return c.ByTag(ctx, "jazz") }, 300},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := one(t, body)
+			got, err := tt.call(c)
+			if err != nil || len(got) != tt.keep {
+				t.Fatalf("kept %d stations, %v; want %d", len(got), err, tt.keep)
+			}
+			if got[0].ID != "u0" || got[tt.keep-1].ID != fmt.Sprintf("u%d", tt.keep-1) {
+				t.Fatalf("kept %s to %s", got[0].ID, got[tt.keep-1].ID)
+			}
+		})
+	}
+}
+
+// An answer that isn't the JSON asked for is an error, not an empty list.
+func TestMalformedAnswersAreErrors(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name, path string
+		call       func(*Client) (int, error)
+	}{
+		{"stations", "/json/stations/search", func(c *Client) (int, error) { s, err := c.Top(ctx); return len(s), err }},
+		{"countries", "/json/countries", func(c *Client) (int, error) { s, err := c.Countries(ctx); return len(s), err }},
+		{"genres", "/json/tags", func(c *Client) (int, error) { s, err := c.Genres(ctx); return len(s), err }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, body := range []string{`[{"stationuuid":"a","name":`, `{"error":"busy"}`, ``, `<html>`} {
+				c, _ := clientFor(newRB(t, 0, map[string]string{tt.path: body}))
+				if n, err := tt.call(c); err == nil || n != 0 {
+					t.Errorf("answered %q: %d, %v; want an error", body, n, err)
+				}
+			}
+		})
 	}
 }
 
