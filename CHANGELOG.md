@@ -2,6 +2,25 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.6.0]
+
+### Added
+
+- **Radio:** a new Radio tab plays internet radio from Radio Browser, a free directory of stations that needs no account.
+  - Browse the most played stations, or stations by country or by genre, or search for a station by name.
+  - Press Y on a station to save it. Saved stations come first on the tab and get a row of their own on Home.
+  - A station plays with the list it came from, so L1 and R1 step to the next station.
+  - Now Playing shows the station's logo and the song it is playing, with a Live mark where the progress bar would be.
+  - MP3 and AAC stations play, AAC+ included. If a stream drops, Boombrick connects again by itself, and gives up after 2 minutes.
+  - Pause stops the stream, and Play picks it up live.
+  - Stations play on with **Play in background** too.
+- **Radio switch:** Settings' Integrations page has a switch for Radio. With it off, the Radio tab and Home's Radio row are hidden.
+
+### Changed
+
+- While a station plays, the sleep timer offers only its timed choices, as a station has no end.
+- The Spotify badge on Now Playing dims while you're offline.
+
 ## [v0.5.3]
 
 ### Added
