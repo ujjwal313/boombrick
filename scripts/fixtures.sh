@@ -138,6 +138,13 @@ noise 44100 30 -ac 2 -c:a libvorbis -b:a 160k "$spot/noise-160k.ogg"
 ffmpeg -loglevel error -y -i "$spot/noise-160k.ogg" -f f32le "$spot/noise-160k.f32"
 ls -l "$spot"
 
+# Radio streams: MP3 and ADTS AAC as stations send them, with no container
+# and no tags.
+noise 44100 5 -ac 2 -c:a libmp3lame -b:a 128k -write_xing 0 -id3v2_version 0 "$out/stream-44100.mp3"
+noise 44100 5 -ac 2 -c:a aac -b:a 128k -f adts "$out/stream-44100.aac"
+noise 22050 5 -ac 1 -c:a aac -b:a 48k -f adts "$out/stream-22050.aac"
+noise 48000 5 -ac 2 -c:a aac -b:a 128k -f adts "$out/stream-48000.aac"
+
 ls -l "$out"
 
 # Fonts for the text engine's tests: a few characters each, cut with

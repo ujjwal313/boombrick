@@ -1,6 +1,10 @@
 package aac
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestRejectsMissingConfig(t *testing.T) {
 	if _, err := New(nil); err == nil {
@@ -69,5 +73,83 @@ func TestRejectsBadConfig(t *testing.T) {
 			d.Close()
 			t.Fatalf("New(%x) should fail", config)
 		}
+	}
+}
+
+// adtsFrames cuts an ADTS stream into frames by the length in each header.
+func adtsFrames(t *testing.T, name string) [][]byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "decode", "testdata", name))
+	if err != nil {
+		t.Skipf("%s is missing; run make fixtures", name)
+	}
+	var frames [][]byte
+	for len(data) >= 7 {
+		if data[0] != 0xFF || data[1]&0xF0 != 0xF0 {
+			t.Fatalf("no sync word after %d frames", len(frames))
+		}
+		n := int(data[3]&3)<<11 | int(data[4])<<3 | int(data[5])>>5
+		if n < 7 || n > len(data) {
+			break
+		}
+		frames = append(frames, data[:n])
+		data = data[n:]
+	}
+	return frames
+}
+
+func TestDecodesADTS(t *testing.T) {
+	frames := adtsFrames(t, "stream-44100.aac")
+	d, err := NewADTS(frames[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if d.Rate() != 44100 {
+		t.Fatalf("Rate = %d, want 44100", d.Rate())
+	}
+	dst := make([]float32, 2*MaxFrame)
+	total := 0
+	for _, f := range frames {
+		n, err := d.Decode(f, dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += n
+	}
+	if want := 5 * 44100; total < want-2048 || total > want+2048 {
+		t.Errorf("total = %d frames, want %d within 2048", total, want)
+	}
+	if d.FrameRate() != 44100 {
+		t.Errorf("FrameRate = %d, want 44100", d.FrameRate())
+	}
+}
+
+func TestADTSMonoAt22kHzIsUpsampled(t *testing.T) {
+	frames := adtsFrames(t, "stream-22050.aac")
+	d, err := NewADTS(frames[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if d.Rate() != 44100 {
+		t.Fatalf("Rate = %d, want 44100", d.Rate())
+	}
+	dst := make([]float32, 2*MaxFrame)
+	heard := false
+	for _, f := range frames {
+		n, err := d.Decode(f, dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range n {
+			if dst[2*i] != dst[2*i+1] {
+				t.Fatalf("frame %d: sides differ", i)
+			}
+			heard = heard || dst[2*i] != 0
+		}
+	}
+	if !heard {
+		t.Error("decoded only silence")
 	}
 }

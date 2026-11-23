@@ -21,9 +21,27 @@ static NeAACDecHandle bb_open(unsigned char *config, unsigned long n, unsigned l
 	return h;
 }
 
+// bb_open_adts opens a decoder for an ADTS stream from its first frame,
+// which must start at the header's sync word.
+static NeAACDecHandle bb_open_adts(unsigned char *frame, unsigned long n, unsigned long *rate, unsigned char *ch) {
+	NeAACDecHandle h = NeAACDecOpen();
+	if (h == NULL) return NULL;
+	NeAACDecConfigurationPtr c = NeAACDecGetCurrentConfiguration(h);
+	c->outputFormat = FAAD_FMT_FLOAT;
+	c->downMatrix = 1;
+	c->defObjectType = LC;
+	NeAACDecSetConfiguration(h, c);
+	if (NeAACDecInit(h, frame, n, rate, ch) < 0) {
+		NeAACDecClose(h);
+		return NULL;
+	}
+	return h;
+}
+
 typedef struct {
 	int error;
 	unsigned long samples;
+	unsigned long rate;
 	unsigned char channels;
 } bb_result;
 
@@ -39,6 +57,7 @@ static bb_result bb_decode(NeAACDecHandle h, unsigned char *frame, unsigned long
 	r.error = info.error;
 	r.samples = info.samples;
 	r.channels = info.channels;
+	r.rate = info.samplerate;
 	return r;
 }
 */
@@ -71,6 +90,7 @@ func outChannels(ch int) int {
 type Decoder struct {
 	h    C.NeAACDecHandle
 	rate int
+	last int // the rate of the last frame that produced audio
 	out  []float32
 }
 
@@ -91,6 +111,28 @@ func New(config []byte) (*Decoder, error) {
 	}
 	return &Decoder{h: h, rate: int(rate), out: make([]float32, MaxFrame*outChannels(int(ch)))}, nil
 }
+
+// NewADTS creates a decoder for an ADTS stream, as a radio station sends it,
+// from its first frame, which must start at the header's sync word.
+func NewADTS(frame []byte) (*Decoder, error) {
+	if len(frame) < 7 {
+		return nil, errors.New("aac: not an ADTS stream")
+	}
+	var rate C.ulong
+	var ch C.uchar
+	h := C.bb_open_adts((*C.uchar)(&frame[0]), C.ulong(len(frame)), &rate, &ch)
+	if h != nil && rate == 0 {
+		C.NeAACDecClose(h)
+		h = nil
+	}
+	if h == nil {
+		return nil, errors.New("aac: not an ADTS stream")
+	}
+	return &Decoder{h: h, rate: int(rate), out: make([]float32, MaxFrame*outChannels(int(ch)))}, nil
+}
+
+// FrameRate is the rate the last frame that produced audio decoded at.
+func (d *Decoder) FrameRate() int { return d.last }
 
 // Rate is the decoded sample rate, which SBR, or faad2's upsampling of
 // streams at 24 kHz or less in case they carry SBR, makes double the stream's.
@@ -113,6 +155,9 @@ func (d *Decoder) Decode(frame []byte, dst []float32) (int, error) {
 		return 0, nil
 	}
 	n := min(int(res.samples)/c, MaxFrame)
+	if n > 0 {
+		d.last = int(res.rate)
+	}
 	for i := 0; i < n; i++ {
 		l := d.out[i*c]
 		r := l
