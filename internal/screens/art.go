@@ -37,12 +37,25 @@ func SongArt(t *library.Track) widgets.ArtSpec {
 	return s
 }
 
+// StationArt is a station's logo, or a placeholder showing its initial.
+func StationArt(name, logo string) widgets.ArtSpec {
+	s := widgets.SpecFor(name)
+	s.Variant = 2
+	if logo != "" {
+		s.Cover = media.Cover{URL: logo}
+	}
+	return s
+}
+
 // LikedArt is Spotify's Liked Songs: a heart on rose.
 var LikedArt = widgets.ArtSpec{Hue: 330, Variant: 2, Glyph: "♥"}
 
 // TrackArt is the art of a queued track's album: a streamed track's from its
-// cover link.
+// cover link. A station's is its logo.
 func TrackArt(t player.Track) widgets.ArtSpec {
+	if t.Live() {
+		return StationArt(t.Title, t.Cover)
+	}
 	s := widgets.SpecFor(t.Album)
 	s.Cover = media.Cover{Artist: t.AlbumArtist, Album: t.Album, Path: t.Path}
 	if t.Streamed() && t.Cover != "" {

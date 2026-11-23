@@ -14,12 +14,17 @@ import (
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/uitest"
+	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 	"github.com/ujjwal313/boombrick/internal/ytmusic"
 )
 
 func TestMain(m *testing.M) { uitest.Main(m) }
 
 var t0 = time.Unix(1000, 0)
+
+// fiveTabs are the tabs there were before Radio, which the goldens were made
+// with.
+var fiveTabs = []int{widgets.TabHome, widgets.TabLibrary, widgets.TabSpotify, widgets.TabYouTube, widgets.TabDownloads}
 
 func press(b input.Button) input.Event { return input.Event{Button: b, Kind: input.Press} }
 
@@ -54,6 +59,7 @@ func render(t *testing.T, s screens.Screen, now time.Time) *image.NRGBA {
 	uitest.WithCovers(u)
 	u.Accent = theme.Derive(265, 0.12)
 	u.Status = fixture.Status()
+	u.Tabs.Shown = fiveTabs
 	u.BeginFrame(now)
 	s.Draw(u)
 	u.BeginFrame(now.Add(anim.ArtFade))

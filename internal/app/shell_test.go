@@ -109,10 +109,10 @@ func TestTabsKeepTheirStacks(t *testing.T) {
 	}
 }
 
-func fiveTabs() (*shell, []*page) {
+func sixTabs() (*shell, []*page) {
 	var tabs []*page
 	var roots []screens.Screen
-	for _, n := range []string{"home", "library", "spotify", "youtube", "downloads"} {
+	for _, n := range []string{"home", "library", "spotify", "youtube", "downloads", "radio"} {
 		p := &page{name: n}
 		tabs = append(tabs, p)
 		roots = append(roots, p)
@@ -121,8 +121,8 @@ func fiveTabs() (*shell, []*page) {
 }
 
 func TestL1AndR1WrapAround(t *testing.T) {
-	s, _ := fiveTabs()
-	if !s.handle(press(input.L1), t0) || s.tab != widgets.TabDownloads {
+	s, _ := sixTabs()
+	if !s.handle(press(input.L1), t0) || s.tab != widgets.TabRadio {
 		t.Fatalf("L1 on the first tab went to %d, want the last", s.tab)
 	}
 	if !s.handle(press(input.R1), t0) || s.tab != widgets.TabHome {
@@ -131,7 +131,7 @@ func TestL1AndR1WrapAround(t *testing.T) {
 }
 
 func TestHiddenTabsAreSkipped(t *testing.T) {
-	s, _ := fiveTabs()
+	s, _ := sixTabs()
 	s.setShown([]int{widgets.TabHome, widgets.TabLibrary, widgets.TabSpotify})
 	s.handle(press(input.R1), t0)
 	s.handle(press(input.R1), t0)
@@ -148,7 +148,7 @@ func TestHiddenTabsAreSkipped(t *testing.T) {
 }
 
 func TestShowingAHiddenTabKeepsTheOverlayOpen(t *testing.T) {
-	s, _ := fiveTabs()
+	s, _ := sixTabs()
 	np := &page{name: "now playing"}
 	s.overlays = []overlay{{button: input.Start, screen: np}}
 	s.setShown([]int{widgets.TabHome, widgets.TabLibrary})
@@ -160,7 +160,7 @@ func TestShowingAHiddenTabKeepsTheOverlayOpen(t *testing.T) {
 }
 
 func TestHidingTheCurrentTabGoesHome(t *testing.T) {
-	s, tabs := fiveTabs()
+	s, tabs := sixTabs()
 	s.showTab(widgets.TabSpotify, t0)
 	s.push(&page{name: "playlist"}, t0)
 	s.setShown([]int{widgets.TabHome, widgets.TabLibrary, widgets.TabYouTube, widgets.TabDownloads})
@@ -179,7 +179,7 @@ func TestHidingTheCurrentTabGoesHome(t *testing.T) {
 }
 
 func TestOneTabShownDoesNotSwitch(t *testing.T) {
-	s, _ := fiveTabs()
+	s, _ := sixTabs()
 	s.setShown([]int{widgets.TabHome})
 	if s.handle(press(input.R1), t0) || s.tab != widgets.TabHome {
 		t.Fatal("with one tab, R1 has nowhere to go")

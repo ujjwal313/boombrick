@@ -253,7 +253,7 @@ func (pg *PlaylistPage) Draw(u *ui.Context) {
 		case pg.err != nil:
 			s, hints = failText(pg.err), retryPageHints
 		}
-		message(u, &pg.msg, s, gfx.Rect{X: screens.PageListX, Y: screens.ContentTop,
+		screens.Message(u, &pg.msg, s, gfx.Rect{X: screens.PageListX, Y: screens.ContentTop,
 			W: theme.ScreenW - screens.Side - screens.PageListX, H: screens.ContentBot - screens.ContentTop})
 	}
 	widgets.StatusBar(u)

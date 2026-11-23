@@ -34,7 +34,7 @@ func TestChromeSheet(t *testing.T) {
 	Tabs(u, 0)
 
 	x := float32(32)
-	for _, src := range []media.Source{media.Spotify, media.YouTube, media.Downloaded, media.Local} {
+	for _, src := range []media.Source{media.Spotify, media.YouTube, media.Downloaded, media.Local, media.Radio} {
 		x += Badge(u, src, x, 140, false) + 12
 	}
 
@@ -585,6 +585,7 @@ func TestFiltersMeasureWhatTheyDraw(t *testing.T) {
 func TestDialog(t *testing.T) {
 	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
 	u.Accent = theme.Derive(265, 0.12)
+	u.Tabs.Shown = fiveTabs
 	DrawBackground(u, TabGround)
 	StatusBar(u)
 	Tabs(u, 4)

@@ -30,13 +30,14 @@ const (
 	TabSpotify
 	TabYouTube
 	TabDownloads
+	TabRadio
 	TabCount
 )
 
-var tabNames = [TabCount]string{"Home", "Library", "Spotify", "YouTube", "Downloads"}
+var tabNames = [TabCount]string{"Home", "Library", "Spotify", "YouTube", "Downloads", "Radio"}
 
 // allTabs is every tab, shown when u.Tabs.Shown is nil.
-var allTabs = []int{TabHome, TabLibrary, TabSpotify, TabYouTube, TabDownloads}
+var allTabs = []int{TabHome, TabLibrary, TabSpotify, TabYouTube, TabDownloads, TabRadio}
 
 // TabName is the name tab id shows.
 func TabName(id int) string { return tabNames[id] }
@@ -197,7 +198,11 @@ func Tabs(u *ui.Context, active int) {
 	}
 	for i, id := range shown {
 		x := start + xs[i] - off
+		// A name out of the window is drawn too, fully faded: that keeps its
+		// texture, and so its width, in the cache. Measured without one, it
+		// would be shaped again in every frame.
 		if x+ws[i] <= start || x >= right {
+			u.TextFade(tabNames[id], text.Tab, x, ty, theme.Ink3, start, right, fadeL, fadeR)
 			continue
 		}
 		col := theme.Ink3

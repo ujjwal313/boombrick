@@ -245,7 +245,7 @@ func (p *Progress) Draw(u *ui.Context) {
 	u.Text(line, lineText, sx, by+barH+12, theme.Ink2)
 	top += summaryArt + 20
 	if all == 0 {
-		message(u, &p.msg, "No songs to download yet.", gfx.Rect{X: screens.Side, Y: top, W: theme.ScreenW - 2*screens.Side,
+		screens.Message(u, &p.msg, "No songs to download yet.", gfx.Rect{X: screens.Side, Y: top, W: theme.ScreenW - 2*screens.Side,
 			H: screens.ContentBot - top})
 	} else {
 		p.drawRows(u, top)

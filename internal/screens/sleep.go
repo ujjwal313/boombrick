@@ -54,13 +54,26 @@ func SleepDue(s player.Sleep, t time.Time) (time.Time, bool) {
 }
 
 // NextSleep is the mode after m in the order offered, back to Off after the
-// last; step -1 goes the other way.
-func NextSleep(m player.SleepMode, step int) player.SleepMode {
+// last; step -1 goes the other way. While a station plays (live) it passes
+// over End of track and End of album, which a station never reaches.
+func NextSleep(m player.SleepMode, step int, live bool) player.SleepMode {
 	n := len(player.SleepModes)
 	for i, x := range player.SleepModes {
-		if x == m {
-			return player.SleepModes[((i+step)%n+n)%n]
+		if x != m {
+			continue
+		}
+		for range n {
+			i = ((i+step)%n + n) % n
+			if next := player.SleepModes[i]; SleepOffered(next, live) {
+				return next
+			}
 		}
 	}
 	return player.SleepOff
+}
+
+// SleepOffered reports whether the timer offers mode m: while a station plays
+// (live) it doesn't offer End of track or End of album.
+func SleepOffered(m player.SleepMode, live bool) bool {
+	return !live || m != player.SleepTrack && m != player.SleepAlbum
 }

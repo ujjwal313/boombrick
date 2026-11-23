@@ -12,6 +12,10 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/uitest"
 )
 
+// fiveTabs are the tabs there were before Radio: the tests of how a row of
+// five lays out and scrolls read them from here.
+var fiveTabs = []int{TabHome, TabLibrary, TabSpotify, TabYouTube, TabDownloads}
+
 // tabRow draws the status bar and the tab row with shown and active.
 func tabRow(t *testing.T, shown []int, active int) (*ui.Context, *gfx.Offscreen) {
 	t.Helper()
@@ -32,9 +36,12 @@ func TestTabRowGoldens(t *testing.T) {
 	}{
 		{"tabs-2-last", []int{TabHome, TabLibrary}, TabLibrary},
 		{"tabs-3-first", []int{TabHome, TabLibrary, TabYouTube}, TabHome},
-		{"tabs-5-first", nil, TabHome},
-		{"tabs-5-middle", nil, TabSpotify},
-		{"tabs-5-last", nil, TabDownloads},
+		{"tabs-5-first", fiveTabs, TabHome},
+		{"tabs-5-middle", fiveTabs, TabSpotify},
+		{"tabs-5-last", fiveTabs, TabDownloads},
+		{"tabs-6-first", nil, TabHome},
+		{"tabs-6-middle", nil, TabYouTube},
+		{"tabs-6-last", nil, TabRadio},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, off := tabRow(t, c.shown, c.active)
@@ -46,7 +53,7 @@ func TestTabRowGoldens(t *testing.T) {
 // R1 ends at the right-hand padding: nothing is drawn in the last 32 px,
 // which the five tabs of before ran into.
 func TestTabRowKeepsR1Whole(t *testing.T) {
-	for _, active := range []int{TabHome, TabSpotify, TabDownloads} {
+	for _, active := range []int{TabHome, TabSpotify, TabDownloads, TabRadio} {
 		_, off := tabRow(t, nil, active)
 		img := off.Image()
 		for y := int(StatusHeight * theme.Scale); y < img.Bounds().Dy(); y++ {
@@ -83,7 +90,7 @@ func TestTabRowSpansTheScreen(t *testing.T) {
 // The row scrolls as little as keeps the active name in view, and slides to
 // a new one rather than jumping.
 func TestTabRowScrollsToTheActiveTab(t *testing.T) {
-	u, _ := tabRow(t, nil, TabHome)
+	u, _ := tabRow(t, fiveTabs, TabHome)
 	if got := u.Tabs.Scroll.Target(); got != 0 {
 		t.Fatalf("on Home the row is scrolled %v, want 0", got)
 	}
@@ -124,6 +131,17 @@ func TestTabRowThatFitsDoesNotScroll(t *testing.T) {
 		u, _ := tabRow(t, []int{TabHome, TabLibrary, TabYouTube}, active)
 		if got := u.Tabs.Scroll.Target(); got != 0 {
 			t.Errorf("%s active: scrolled %v, want 0", fmt.Sprint(TabName(active)), got)
+		}
+	}
+}
+
+// A frame drawn again allocates nothing, whichever name lies outside the
+// window: its width is kept with its texture, not shaped again.
+func TestTabRowDrawnAgainAllocatesNothing(t *testing.T) {
+	for _, active := range []int{TabHome, TabYouTube, TabRadio} {
+		u, _ := tabRow(t, nil, active)
+		if n := testing.AllocsPerRun(10, func() { Tabs(u, active) }); n != 0 {
+			t.Errorf("%s active: a frame allocates %v times", TabName(active), n)
 		}
 	}
 }

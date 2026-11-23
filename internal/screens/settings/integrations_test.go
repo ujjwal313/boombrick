@@ -17,9 +17,10 @@ import (
 var integrations = []Integration{
 	{Key: keys.SpotifyOn, Name: "Spotify", Icon: "stream", About: "Stream your playlists and liked songs · needs Premium"},
 	{Key: keys.YouTubeOn, Name: "YouTube", Icon: "circleplay", About: "Search YouTube Music and download songs"},
+	{Key: keys.RadioOn, Name: "Radio", Icon: "radio", About: "Stations from Radio Browser"},
 }
 
-// switchEnv is Settings with both integrations, the Spotify account and the
+// switchEnv is Settings with the integrations, the Spotify account and the
 // Downloader card, recording the switches.
 type switchEnv struct {
 	*env
@@ -49,7 +50,7 @@ func TestTheIntegrationsRowComesFirst(t *testing.T) {
 	if e.s.focus != rowIntegrations {
 		t.Fatalf("focus starts on %d, want Integrations", e.s.focus)
 	}
-	if got := e.s.rows[rowIntegrations].Value; got != "2 of 2 on" {
+	if got := e.s.rows[rowIntegrations].Value; got != "3 of 3 on" {
 		t.Fatalf("the row says %q", got)
 	}
 	uitest.Golden(t, "settings-integrations-row", render(t, e.env, t0))
@@ -77,7 +78,7 @@ func TestTheIntegrationsPageSwitches(t *testing.T) {
 	if e.s.Back(); e.s.integrations != nil {
 		t.Fatal("B should leave the page")
 	}
-	if got := e.s.rows[rowIntegrations].Value; got != "1 of 2 on" {
+	if got := e.s.rows[rowIntegrations].Value; got != "2 of 3 on" {
 		t.Fatalf("back on Settings the row says %q", got)
 	}
 	e.s.Handle(press(input.A), t0)
@@ -96,10 +97,11 @@ func TestTheIntegrationsPageFocus(t *testing.T) {
 		t.Fatal("Up from the first row should do nothing")
 	}
 	e.s.Handle(press(input.Down), t0)
+	e.s.Handle(press(input.Down), t0)
 	if e.s.Handle(press(input.Down), t0) {
 		t.Fatal("Down from the last row should do nothing")
 	}
-	if e.s.integrations.focus != 1 {
+	if e.s.integrations.focus != 2 {
 		t.Fatalf("focus on %d", e.s.integrations.focus)
 	}
 }
@@ -126,7 +128,7 @@ func TestRowsOfAnIntegrationSwitchedOffAreHidden(t *testing.T) {
 	if !sp.s.shown(rowQuality) || !sp.s.shown(pillTool) {
 		t.Error("YouTube's rows went with Spotify")
 	}
-	if sp.s.rows[rowIntegrations].Value != "1 of 2 on" {
+	if sp.s.rows[rowIntegrations].Value != "2 of 3 on" {
 		t.Errorf("the row says %q", sp.s.rows[rowIntegrations].Value)
 	}
 

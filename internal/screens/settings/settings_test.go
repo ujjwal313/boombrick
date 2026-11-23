@@ -41,10 +41,17 @@ func (p prefs) SetBool(k string, v bool) { p[k] = map[bool]string{true: "true", 
 
 type fakePlayer struct {
 	sleep     player.Sleep
+	live      bool
 	levelling []bool
 }
 
 func (f *fakePlayer) Sleep() player.Sleep { return f.sleep }
+func (f *fakePlayer) State() player.State {
+	if f.live {
+		return player.State{Queued: true, Playing: true, Track: player.Track{StationID: "s1", Stream: "http://x/live"}}
+	}
+	return player.State{}
+}
 func (f *fakePlayer) SetSleep(m player.SleepMode) {
 	f.sleep = player.Sleep{Mode: m}
 	if m.Timed() {
@@ -595,5 +602,28 @@ func TestScrollComesToRest(t *testing.T) {
 	}
 	if got, want := down(), float64(6*widgets.SettingHeight+16); e.s.focus != pillTool || got != want {
 		t.Errorf("on %d the scroll rests at %.1f, want %.1f for the Downloader card's top", e.s.focus, got, want)
+	}
+}
+
+func TestSleepTimerWhileAStationPlays(t *testing.T) {
+	e := newEnv(true)
+	e.p.live = true
+	e.s.Handle(press(input.Down), t0)
+	e.s.Handle(press(input.Down), t0)
+	e.s.Handle(press(input.A), t0)
+	for range 4 {
+		e.s.Handle(press(input.Right), t0)
+	}
+	if e.p.sleep.Mode != player.Sleep60 {
+		t.Fatalf("Rights set the timer to %v, want 60 min", e.p.sleep.Mode)
+	}
+	if e.s.Handle(press(input.Right), t0) || e.p.sleep.Mode != player.Sleep60 {
+		t.Fatalf("Right past 60 min set %v, want it to stay", e.p.sleep.Mode)
+	}
+	uitest.Golden(t, "settings-sleep-station", render(t, e, t0.Add(anim.Focus)))
+	e.p.live = false
+	e.s.Handle(press(input.Right), t0)
+	if e.p.sleep.Mode != player.SleepTrack {
+		t.Fatalf("Right with no station set %v, want End of track", e.p.sleep.Mode)
 	}
 }

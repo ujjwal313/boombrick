@@ -135,6 +135,21 @@ func TestNothingQueuedNothingSeeks(t *testing.T) {
 	}
 }
 
+// A station plays live: the triggers have nothing to seek in, and leave it be.
+func TestStationsDontSeek(t *testing.T) {
+	p := &seeker{st: player.State{Queued: true, Playing: true, Elapsed: 93 * time.Second,
+		Track: player.Track{Title: "Radio City", Stream: "http://stream.radio.test/city"}}}
+	s := NewScrub(p)
+	for _, b := range []input.Button{input.L2, input.R2} {
+		if s.Handle(trigger(b, input.Press), t0) || s.Active() || s.Handle(trigger(b, input.Release), t0.Add(time.Second)) {
+			t.Errorf("%v did something on a station", b)
+		}
+	}
+	if len(p.seeks) != 0 {
+		t.Fatalf("seeks %v on a station", p.seeks)
+	}
+}
+
 // The quick menu, another screen or the screen going off can take the
 // trigger's release: the scrub is dropped, and asks for no more frames.
 func TestScrubDroppedWhenTheReleaseGoesElsewhere(t *testing.T) {

@@ -30,6 +30,7 @@ type Prefs interface {
 // Player is what Settings changes in the player. *player.Player is one.
 type Player interface {
 	Sleep() player.Sleep
+	State() player.State
 	SetSleep(m player.SleepMode)
 	SetLevelling(on bool)
 }
@@ -369,7 +370,12 @@ func (s *Screen) choose(step int) bool {
 		s.opts.Prefs.Set(keys.DownloadQuality, qualities[i].value)
 		s.readPrefs()
 	case rowSleep:
+		// A step passes over the modes a station can't reach.
+		live := s.live()
 		i := s.sleepIndex() + step
+		for i >= 0 && i < len(player.SleepModes) && !screens.SleepOffered(player.SleepModes[i], live) {
+			i += step
+		}
 		if i < 0 || i >= len(player.SleepModes) {
 			return false
 		}
@@ -703,6 +709,7 @@ func (s *Screen) drawPanel(u *ui.Context, row int, box gfx.Rect) {
 	u.Text(about, aboutText, x, y, theme.Ink3)
 	y += u.LineHeight(aboutText) + 14
 	cellH := optionHeight(u, choices)
+	live := row == rowSleep && s.live()
 	for i, c := range choices {
 		// Each line shares the width out among its own options, so a short
 		// last line gives long labels room.
@@ -713,6 +720,9 @@ func (s *Screen) drawPanel(u *ui.Context, row int, box gfx.Rect) {
 		ring, ink := theme.PaperA(0.45), theme.Ink2
 		if i == chosen {
 			ring, ink = theme.Gold, theme.Paper
+		}
+		if live && !screens.SleepOffered(player.SleepModes[i], true) {
+			ring, ink = theme.Ink4, theme.Ink4
 		}
 		widgets.Radio(u, cx, ry, radio, ring, i == chosen)
 		u.Text(c.label, optionText, cx+radio+12, cy, ink)
@@ -746,3 +756,7 @@ func (s *Screen) hint() []widgets.Hint {
 	s.hints[k] = h
 	return h
 }
+
+// live reports whether a station plays, which has no end of a track or album
+// for the sleep timer to wait for.
+func (s *Screen) live() bool { return s.opts.Player.State().Track.Live() }

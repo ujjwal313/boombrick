@@ -2,6 +2,7 @@
 package app
 
 import (
+	"cmp"
 	"fmt"
 	"image/color"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/platform"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/radio"
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/screens/browse"
@@ -30,6 +32,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/screens/nowplaying"
 	"github.com/ujjwal313/boombrick/internal/screens/queue"
 	"github.com/ujjwal313/boombrick/internal/screens/quickmenu"
+	radioscreen "github.com/ujjwal313/boombrick/internal/screens/radio"
 	settingsscreen "github.com/ujjwal313/boombrick/internal/screens/settings"
 	spotifyscreen "github.com/ujjwal313/boombrick/internal/screens/spotify"
 	"github.com/ujjwal313/boombrick/internal/screens/youtube"
@@ -126,6 +129,10 @@ type Options struct {
 	// Importer imports Spotify playlists to downloads. Without it, or
 	// without Spotify or Downloads, nothing offers an import.
 	Importer Importer
+	// Radio is the station directory, and Stations the stations saved. Without
+	// Radio there is no Radio tab and no Radio switch.
+	Radio    *radio.Directory
+	Stations *radio.Stations
 	// Background hands the music to the background player, and returns once
 	// it plays; the app then quits. Without it the quick menu has no Play in
 	// background.
@@ -232,7 +239,8 @@ type App struct {
 	down       [input.VolDown + 1]bool // the buttons down, by their last events
 	home       *home.Home
 	nowPlaying *nowplaying.NowPlaying
-	music      transport // the player, for the buttons heard with the screen off
+	music      transport                              // the player, for the buttons heard with the screen off
+	play       func(tracks []player.Track, start int) // starts the tracks at one, as Home's stations do
 	library    *browse.Library
 	queue      *queue.Queue
 	shell      *shell
@@ -268,6 +276,7 @@ type App struct {
 	expiredOnce bool
 	playlists   []spotify.Playlist
 	progress    []resume.Progress
+	stationsAt  uint64 // the saved stations' version Home was last built from
 
 	loads *loader
 	// set by the forwarding goroutines, taken by poll
@@ -357,6 +366,7 @@ func New(opts Options) (*App, error) {
 	a.grounds = newGrounds(a.fade.target(), renderGrounds, a.wake)
 	if opts.Player != nil {
 		a.music = opts.Player
+		a.play = opts.Player.Play
 	}
 	if opts.Status != nil {
 		a.reader.Go(func() { watchStatus(opts.Status, statusEvery, a.statuses, a.wake, a.lit, a.stop) })
@@ -418,11 +428,18 @@ func New(opts Options) (*App, error) {
 		a.forward(opts.Spotify.Ready(), &a.spotified)
 		opts.Spotify.Saved() // reads the playlists kept, for Home, without starting the helper
 	}
+	if opts.Radio != nil {
+		a.forward(opts.Radio.Ready(), &a.redraw)
+	}
+	if opts.Stations != nil {
+		a.forward(opts.Stations.Ready(), &a.redraw)
+	}
 	a.shell = newShell(a.home,
 		a.library,
 		spTab,
 		ytTab,
-		dlTab)
+		dlTab,
+		a.radioTab())
 	if a.expired != nil {
 		a.shell.alert = a.expired
 	}
@@ -435,11 +452,21 @@ func New(opts Options) (*App, error) {
 	return a, nil
 }
 
+// radioTab is the Radio tab's root: the tab, with the station directory and
+// the stations saved, or without either a stand-in.
+func (a *App) radioTab() screens.Screen {
+	if a.opts.Radio == nil || a.opts.Stations == nil || a.opts.Player == nil {
+		return &screens.Placeholder{Tab: widgets.TabRadio, Title: "Radio"}
+	}
+	return radioscreen.NewTab(&radioscreen.Env{Nav: a, Dir: a.opts.Radio, Saved: a.opts.Stations, Player: a.opts.Player})
+}
+
 // quickMenu makes the quick menu, and the Settings screen it opens.
 func (a *App) quickMenu() *quickmenu.Menu {
 	act := quickmenu.Actions{Sleep: a.opts.Player.Sleep, SetSleep: a.opts.Player.SetSleep,
 		ScreenOff: func() { a.setDark(true) }, OpenSettings: func() {}, Quit: func() { a.quit = true }}
 	act.Playing = func() bool { return a.last.Playing }
+	act.Live = func() bool { return a.last.Track.Live() }
 	if a.opts.Background != nil {
 		act.PlayInBackground = a.playInBackground
 	}
@@ -653,6 +680,7 @@ func (a *App) poll() {
 			a.dirty = true
 		}
 	}
+	a.followStations()
 	art := a.arts.Swap(false)
 	if a.redraw.Swap(false) || art {
 		a.dirty = true
@@ -685,14 +713,11 @@ func (a *App) poll() {
 	if st.Err != nil && l.Err == nil {
 		a.opts.Log.Warn("playback paused by an output error", "err", st.Err)
 	}
-	if st.Queued != l.Queued || st.Track != l.Track || st.Playing != l.Playing || st.Shuffle != l.Shuffle || st.Repeat != l.Repeat {
-		a.ui.Status.NowPlaying = ""
-		if st.Queued {
-			a.ui.Status.NowPlaying = st.Track.Title
-		}
+	if playingChanged(st, l) {
+		a.ui.Status.NowPlaying = statusTitle(st)
 		a.dirty = true
 	}
-	if p := tickFor(a.shell.overlay()); a.shell.open >= 0 && st.Elapsed/p != l.Elapsed/p {
+	if p := tickFor(a.shell.overlay()); a.shell.open >= 0 && ticked(st, l, p) {
 		a.dirty = true
 	}
 	// A sleep timer's time left, in the quick menu or Settings, moves on
@@ -763,6 +788,21 @@ func (a *App) showHome(progress []resume.Progress) {
 			imp = a.importPlaylist
 		}
 		if row, ok := home.SpotifyRow(a.playlists, a.openPlaylist, imp); ok {
+			rows = append(rows, row)
+		}
+	}
+	if a.radioOn() && a.opts.Stations != nil && a.opts.Player != nil {
+		saved := a.opts.Stations.List()
+		tracks := make([]player.Track, len(saved))
+		for i, st := range saved {
+			tracks[i] = st.Track()
+		}
+		// Stations play in order, as Home's albums do.
+		play := func(i int) {
+			a.opts.Player.SetShuffle(false)
+			a.play(tracks, i)
+		}
+		if row, ok := home.RadioRow(saved, play); ok {
 			rows = append(rows, row)
 		}
 	}
@@ -1152,6 +1192,31 @@ func (a *App) powerOff() {
 	a.quit = true
 }
 
+// playingChanged reports whether st, what the player gave after l, changes
+// what the screens show of what's playing: the track, the controls, or a
+// station's song and whether it is connecting or reconnecting.
+func playingChanged(st, l player.State) bool {
+	return st.Queued != l.Queued || st.Track != l.Track || st.Playing != l.Playing || st.Shuffle != l.Shuffle ||
+		st.Repeat != l.Repeat || st.LiveTitle != l.LiveTitle || st.Stalled != l.Stalled || st.Loading != l.Loading
+}
+
+// ticked reports whether the time played has moved on by a tick of p from l
+// to st, for Now Playing or the Queue to show. Neither shows a station's, so
+// a station never ticks: its song and its connecting state draw through
+// playingChanged, which poll still checks each tick.
+func ticked(st, l player.State, p time.Duration) bool {
+	return !st.Track.Live() && st.Elapsed/p != l.Elapsed/p
+}
+
+// statusTitle is what the status bar shows of what's playing: the track's
+// title, or the song a station sends, or with none the station's name.
+func statusTitle(st player.State) string {
+	if !st.Queued {
+		return ""
+	}
+	return cmp.Or(st.LiveTitle, st.Track.Title)
+}
+
 // wantsPrefetch reports whether the lyrics of the track st is on are to be
 // asked for, st being what the player gave after l: the track is new, or
 // something is queued again. A streamed song has no path, so tracks are told
@@ -1181,6 +1246,20 @@ func (a *App) fontNews() {
 func (a *App) volumeNews(now time.Time) {
 	if v := a.volume.Swap(0); v > 0 && !a.dark {
 		a.shell.showVolume(int(v-1), now)
+		a.dirty = true
+	}
+}
+
+// followStations builds Home again when a station has been saved or removed
+// since it was last built. Saving redraws through the forwarded Ready, so
+// this runs once per change, not every frame.
+func (a *App) followStations() {
+	if a.opts.Stations == nil {
+		return
+	}
+	if v := a.opts.Stations.Version(); v != a.stationsAt {
+		a.stationsAt = v
+		a.showHome(a.progress)
 		a.dirty = true
 	}
 }

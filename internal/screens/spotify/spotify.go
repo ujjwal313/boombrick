@@ -11,10 +11,6 @@ import (
 	"github.com/ujjwal313/boombrick/internal/player"
 	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/spotify"
-	"github.com/ujjwal313/boombrick/internal/theme"
-	"github.com/ujjwal313/boombrick/internal/ui"
-	"github.com/ujjwal313/boombrick/internal/ui/gfx"
-	"github.com/ujjwal313/boombrick/internal/ui/text"
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
@@ -93,18 +89,6 @@ func failText(err error) string {
 		return "Signed out of Spotify."
 	}
 	return "Couldn’t load from Spotify. Check the connection and try again."
-}
-
-// message draws s wrapped and centred in box, in ink2. The screen keeps the
-// lines in c, so that the same message isn't wrapped every frame.
-func message(u *ui.Context, c *widgets.Wrapped, s string, box gfx.Rect) {
-	lines := c.Lines(u, s, text.Body, box.W)
-	lh := u.LineHeight(text.Body)
-	y := box.Y + (box.H-float32(len(lines))*lh)/2
-	for _, l := range lines {
-		u.Text(l, text.Body, box.X+(box.W-u.TextWidth(l, text.Body))/2, y, theme.Ink2)
-		y += lh
-	}
 }
 
 // Hints the screens share.

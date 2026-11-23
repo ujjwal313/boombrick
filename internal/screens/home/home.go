@@ -10,6 +10,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
+	"github.com/ujjwal313/boombrick/internal/radio"
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/spotify"
@@ -229,6 +230,25 @@ func SpotifyRow(pls []spotify.Playlist, open, imp func(spotify.Playlist)) (fixtu
 		meta = "1 playlist"
 	}
 	return fixture.Row{Title: "Spotify playlists", Meta: meta, Cards: true, Spotify: true, Items: items}, true
+}
+
+// RadioRow is the saved stations, the latest saved first; play starts the
+// one at index i with the row as the queue. A card only plays, so X and Y do
+// nothing on it. It reports false when no station is saved.
+func RadioRow(saved []radio.Station, play func(i int)) (fixture.Row, bool) {
+	if len(saved) == 0 {
+		return fixture.Row{}, false
+	}
+	items := make([]fixture.Item, len(saved))
+	for i, st := range saved {
+		items[i] = fixture.Item{Title: st.Name, Subtitle: st.Country, Art: screens.StationArt(st.Name, st.Logo),
+			Play: func() { play(i) }}
+	}
+	meta := fmt.Sprintf("%d stations", len(saved))
+	if len(saved) == 1 {
+		meta = "1 station"
+	}
+	return fixture.Row{Title: "Radio", Meta: meta, Cards: true, Items: items}, true
 }
 
 // source is where album a's files came from, for its badge: Downloaded for
@@ -525,4 +545,13 @@ func (h *Home) hints() []widgets.Hint {
 	hints = append(hints, widgets.Hint{Key: "L1/R1", Label: "Tabs"})
 	h.hintBars[k] = hints
 	return hints
+}
+
+// RowTitles are the titles of the rows shown, top to bottom.
+func (h *Home) RowTitles() []string {
+	titles := make([]string, len(h.rows))
+	for i, r := range h.rows {
+		titles[i] = r.Title
+	}
+	return titles
 }

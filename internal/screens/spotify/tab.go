@@ -229,13 +229,13 @@ func (t *Tab) Draw(u *ui.Context) {
 	var hints []widgets.Hint
 	switch {
 	case t.failed:
-		message(u, &t.msg, failText(err), content)
+		screens.Message(u, &t.msg, failText(err), content)
 		hints = failedHints
 	case t.signedOut:
 		t.drawSignedOut(u)
 		hints = signInHints
 	case st.State == "":
-		message(u, &t.msg, "Loading…", content)
+		screens.Message(u, &t.msg, "Loading…", content)
 		hints = tabsHints
 	default:
 		t.drawLibrary(u, st, listErr)
@@ -298,7 +298,7 @@ func (t *Tab) drawLibrary(u *ui.Context, st spotify.Status, listErr error) {
 			s = failText(listErr)
 		}
 		top := float32(listTop + screens.Pad + widgets.RowHeight)
-		message(u, &t.msg, s, gfx.Rect{X: screens.Side, Y: top, W: t.list.CellW, H: screens.ContentBot - top})
+		screens.Message(u, &t.msg, s, gfx.Rect{X: screens.Side, Y: top, W: t.list.CellW, H: screens.ContentBot - top})
 	}
 }
 

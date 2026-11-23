@@ -58,3 +58,15 @@ func Heading(u *ui.Context, title, meta string, y float32) {
 	baseline := y + u.Ascent(text.Heading)
 	u.Text(meta, text.Meta, theme.ScreenW-Side-u.TextWidth(meta, text.Meta), u.Baseline(text.Meta, baseline), theme.Ink3)
 }
+
+// Message draws s wrapped and centred in box, in ink2. The screen keeps the
+// lines in c, so that the same message isn't wrapped every frame.
+func Message(u *ui.Context, c *widgets.Wrapped, s string, box gfx.Rect) {
+	lines := c.Lines(u, s, text.Body, box.W)
+	lh := u.LineHeight(text.Body)
+	y := box.Y + (box.H-float32(len(lines))*lh)/2
+	for _, l := range lines {
+		u.Text(l, text.Body, box.X+(box.W-u.TextWidth(l, text.Body))/2, y, theme.Ink2)
+		y += lh
+	}
+}

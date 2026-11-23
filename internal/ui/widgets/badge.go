@@ -17,6 +17,7 @@ var badges = map[media.Source]struct{ icon, label string }{
 	media.YouTube:    {"circleplay", "YouTube Music"},
 	media.Downloaded: {"circledown", "Downloaded"},
 	media.Local:      {"folder", "Local"},
+	media.Radio:      {"radio", "Radio"},
 }
 
 // BadgeWidth measures a source badge.

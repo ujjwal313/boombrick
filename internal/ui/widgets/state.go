@@ -52,27 +52,46 @@ const offlineWidth = 700
 // is, it is drawn in the fallback gold, whatever the album playing. The
 // screen keeps body's lines in c.
 func OfflineState(u *ui.Context, c *Wrapped, body string, pill bool) {
+	OfflineStateBelow(u, c, body, pill, StatusHeight+TabsHeight)
+}
+
+// OfflineStateBelow draws the offline state as OfflineState does, centred
+// between top and the hint bar, for a screen that keeps what is above top,
+// as the Radio tab keeps its filter row.
+func OfflineStateBelow(u *ui.Context, c *Wrapped, body string, pill bool, top float32) {
+	offlineState(u, c, body, pill, gfx.Rect{X: 0, Y: top, W: theme.ScreenW, H: theme.ScreenH - HintsHeight - top})
+}
+
+// OfflineStateIn draws the offline state, without its pill, centred in box,
+// for a screen that shows it beside something else: Radio search keeps its
+// keyboard.
+func OfflineStateIn(u *ui.Context, c *Wrapped, body string, box gfx.Rect) {
+	offlineState(u, c, body, false, box)
+}
+
+// offlineState draws the offline state centred in box.
+func offlineState(u *ui.Context, c *Wrapped, body string, pill bool, box gfx.Rect) {
 	const circle, icon = 96, 46
 	accent := u.Accent
 	u.Accent = theme.Fallback()
 	defer func() { u.Accent = accent }()
-	lines := c.Lines(u, body, stateBody, offlineWidth)
+	lines := c.Lines(u, body, stateBody, min(offlineWidth, box.W))
 	titleH, bodyH := u.LineHeight(stateTitle), u.LineHeight(stateBody)
 	h := circle + 24 + titleH + 12 + float32(len(lines))*bodyH
 	if pill {
 		h += 28 + PillHeight
 	}
-	top := float32(StatusHeight + TabsHeight)
-	y := top + (theme.ScreenH-HintsHeight-top-h)/2
-	x := float32(theme.ScreenW-circle) / 2
+	y := box.Y + (box.H-h)/2
+	mid := box.X + box.W/2
+	x := mid - circle/2
 	u.Shape(raster.Shape{W: circle, H: circle, Radius: circle / 2, Kind: raster.Fill}, gfx.Rect{X: x, Y: y, W: circle, H: circle}, theme.Gold)
 	u.Icon("wifioff", icon, 2.5, false, x+(circle-icon)/2, y+(circle-icon)/2, theme.Ground)
 	y += circle + 24
 	title := "You’re offline"
-	u.Text(title, stateTitle, (theme.ScreenW-u.TextWidth(title, stateTitle))/2, y, theme.Paper)
+	u.Text(title, stateTitle, mid-u.TextWidth(title, stateTitle)/2, y, theme.Paper)
 	y += titleH + 12
 	for _, l := range lines {
-		u.Text(l, stateBody, (theme.ScreenW-u.TextWidth(l, stateBody))/2, y, theme.Ink2)
+		u.Text(l, stateBody, mid-u.TextWidth(l, stateBody)/2, y, theme.Ink2)
 		y += bodyH
 	}
 	if !pill {

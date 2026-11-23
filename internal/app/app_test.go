@@ -116,6 +116,28 @@ func TestTicksCountFromTheFrameStart(t *testing.T) {
 	}
 }
 
+// While a station plays on Now Playing the loop wakes every second, so its
+// song and its connecting state show within a second: the player doesn't wake
+// the loop when they change. A song wakes it 4 times a second for the
+// progress bar.
+func TestAStationOnNowPlayingWakesEverySecond(t *testing.T) {
+	s := newShell(&page{name: "home"})
+	p := &stillPlayer{st: player.State{Queued: true, Playing: true,
+		Track: player.Track{Title: "Radio City", Stream: "http://stream.radio.test/city"}}}
+	addOverlays(s, nowplaying.New(p), &page{name: "queue"}, nil, p, nil, nil)
+	s.handle(press(input.Start), t0)
+	a := &App{shell: s, repeat: input.NewRepeater(), fade: newAccentFade(theme.Fallback()), ui: &ui.Context{}}
+	a.last = p.st
+	start := t0.Add(anim.Push) // Now Playing is in place
+	if got := a.timeout(start, start.Add(40*time.Millisecond)); got != 960*time.Millisecond {
+		t.Fatalf("a station: sleep %v, want 960ms, the rest of the second", got)
+	}
+	p.st.Track = player.Track{Path: "/m/a.flac", Title: "Rust"}
+	if got := a.timeout(start, start.Add(40*time.Millisecond)); got != 210*time.Millisecond {
+		t.Fatalf("a song: sleep %v, want 210ms", got)
+	}
+}
+
 // A toast raised after the frame began, while it was polled or drawn, hasn't
 // shown yet: the loop draws again at once rather than sleeping until the
 // toast fades out.

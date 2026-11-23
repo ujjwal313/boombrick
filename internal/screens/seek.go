@@ -64,7 +64,7 @@ func (s *Scrub) Handle(ev input.Event, now time.Time) bool {
 	case input.Press:
 		s.down = input.None
 		st := s.p.State()
-		if !st.Queued {
+		if !st.Queued || st.Track.Live() { // nothing to seek in: a station plays live
 			return false
 		}
 		to := max(st.Elapsed-SeekStep, 0)

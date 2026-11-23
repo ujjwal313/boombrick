@@ -55,8 +55,23 @@ func TestSleepValues(t *testing.T) {
 	if _, ok := SleepDue(player.Sleep{Mode: player.SleepTrack}, now); ok {
 		t.Error("End of track has a time to change")
 	}
-	if NextSleep(player.SleepAlbum, 1) != player.SleepOff || NextSleep(player.SleepOff, -1) != player.SleepAlbum ||
-		NextSleep(player.Sleep15, 1) != player.Sleep30 {
+	if NextSleep(player.SleepAlbum, 1, false) != player.SleepOff || NextSleep(player.SleepOff, -1, false) != player.SleepAlbum ||
+		NextSleep(player.Sleep15, 1, false) != player.Sleep30 {
 		t.Error("NextSleep doesn't step through the modes in order, wrapping")
+	}
+}
+
+func TestNextSleepPassesOverTheEndsWhileAStationPlays(t *testing.T) {
+	if got := NextSleep(player.Sleep60, 1, true); got != player.SleepOff {
+		t.Errorf("after 60 min live: %v, want Off", got)
+	}
+	if got := NextSleep(player.SleepOff, -1, true); got != player.Sleep60 {
+		t.Errorf("before Off live: %v, want 60 min", got)
+	}
+	if got := NextSleep(player.SleepTrack, -1, true); got != player.Sleep60 {
+		t.Errorf("before End of track live: %v, want 60 min", got)
+	}
+	if got := NextSleep(player.SleepTrack, 1, true); got != player.SleepOff {
+		t.Errorf("after End of track live: %v, want Off", got)
 	}
 }

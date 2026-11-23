@@ -238,6 +238,17 @@ func run(started time.Time) error {
 	spLib := spotify.NewLibrary(sp, db.DB, log)
 	defer spLib.Close()
 
+	// The radio stations the Radio tab lists, and the ones saved. Both close
+	// after the app, whose loop has ended by then, and before the database:
+	// closing the saved stations waits for the writes still queued.
+	directory := radio.NewDirectory(rc, log)
+	defer directory.Close()
+	kept, err := radio.NewStations(db.DB, log)
+	if err != nil {
+		return err
+	}
+	defer kept.Close()
+
 	notices := make(chan player.Notice, 8)
 	p := newPlayer(db.DB, prefs, sp, rc, online, log, func(n player.Notice) {
 		select {
@@ -407,6 +418,8 @@ func run(started time.Time) error {
 		Perf:          rec,
 		Notices:       notices,
 		Spotify:       spLib,
+		Radio:         directory,
+		Stations:      kept,
 		Importer:      im,
 		Hold:          dl.SetHeld,
 		ImportOn:      im.SetEnabled,

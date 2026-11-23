@@ -24,6 +24,7 @@ type acts struct {
 	screenOff, settings, q int
 	playing                bool
 	background             int
+	live                   bool
 }
 
 func (a *acts) actions() Actions {
@@ -35,6 +36,7 @@ func (a *acts) actions() Actions {
 		Quit:             func() { a.q++ },
 		Playing:          func() bool { return a.playing },
 		PlayInBackground: func() { a.background++ },
+		Live:             func() bool { return a.live },
 	}
 }
 
@@ -173,5 +175,24 @@ func TestDueWhileATimerRuns(t *testing.T) {
 	a.sleep = player.Sleep{Mode: player.Sleep15, At: t0.Add(10*time.Second + 250*time.Millisecond)}
 	if due, ok := m.Due(t0); !ok || due != t0.Add(250*time.Millisecond) {
 		t.Fatalf("Due = %v, %v", due.Sub(t0), ok)
+	}
+}
+
+func TestSleepTimerPassesOverTheEndsWhileAStationPlays(t *testing.T) {
+	a := &acts{live: true, sleep: player.Sleep{Mode: player.Sleep60}}
+	m := New(a.actions())
+	m.Open(t0)
+	m.Handle(press(input.Right), t0)
+	if a.sleep.Mode != player.SleepOff {
+		t.Fatalf("Right after 60 min set %v, want Off", a.sleep.Mode)
+	}
+	m.Handle(press(input.Left), t0)
+	if a.sleep.Mode != player.Sleep60 {
+		t.Fatalf("Left from Off set %v, want 60 min", a.sleep.Mode)
+	}
+	a.live = false
+	m.Handle(press(input.Right), t0)
+	if a.sleep.Mode != player.SleepTrack {
+		t.Fatalf("Right after 60 min set %v, want End of track", a.sleep.Mode)
 	}
 }

@@ -1,7 +1,6 @@
 package youtube
 
 import (
-	"math"
 	"strconv"
 	"time"
 
@@ -22,7 +21,6 @@ import (
 // row across the top, 84 px rows under them. A song's row ends with its
 // status, right-aligned in 96, and its download circle.
 const (
-	queryH      = 52
 	resultH     = 84
 	statusW     = 96
 	resultTrail = statusW + 12 + circle
@@ -30,10 +28,7 @@ const (
 	filterCount = len(ytmusic.FilterNames)
 )
 
-var (
-	queryText  = text.Style{Face: text.Figtree, Size: 26}
-	statusText = text.Style{Face: text.Figtree, Size: 20}
-)
+var statusText = text.Style{Face: text.Figtree, Size: 20}
 
 // Results shows what a search found, under each filter in turn.
 type Results struct {
@@ -109,8 +104,7 @@ func (r *Results) place(u *ui.Context) {
 	names := ytmusic.FilterNames[:]
 	r.fx = theme.ScreenW - screens.Side - widgets.FiltersWidth(u, names, nil)
 	maxW := r.fx - 16 - screens.Side
-	r.shown = u.Fit(r.query, queryText, maxW-pillInner)
-	r.pillW = float32(math.Ceil(float64(min(pillInner+u.TextWidth(r.shown, queryText), maxW))))
+	r.shown, r.pillW = screens.FitQuery(u, r.query, maxW)
 	back := widgets.Hint{Key: "B", Label: "Edit search"}
 	for k := range r.kinds {
 		kind := ytmusic.Kind(k)
@@ -189,7 +183,7 @@ func (r *Results) Draw(u *ui.Context) {
 		r.place(u)
 	}
 	widgets.Filters(u, ytmusic.FilterNames[:], nil, int(r.filter), r.fx, screens.ContentTop)
-	queryPill(u, r.shown, r.pillW, screens.Side, screens.ContentTop+(widgets.FiltersHeight-queryH)/2)
+	screens.QueryPill(u, r.shown, r.pillW, screens.Side, screens.ContentTop+(widgets.FiltersHeight-screens.QueryH)/2)
 	if len(r.items[r.filter]) > 0 {
 		r.drawList(u)
 	} else {
@@ -249,20 +243,6 @@ func drawAlbumPill(u *ui.Context, box gfx.Rect, k float32) {
 	x += widgets.KeyGlyph(u, "X", x, y+(albumPillH-widgets.HintRound.Height)/2, widgets.HintRound, theme.PaperA(0.55)) + 10
 	u.Text("Download album", statusText, x, u.CenterY(statusText, y, albumPillH), theme.Paper)
 	u.Alpha = alpha
-}
-
-// pillInner is what a query pill takes besides its text: padding, the icon,
-// its gap and the padding after the query.
-const pillInner = 16 + 22 + 10 + 20
-
-// queryPill draws shown, the query already cut to fit, in a pill w wide with
-// its top-left at (x, y): a search icon, then the text.
-func queryPill(u *ui.Context, shown string, w, x, y float32) {
-	box := gfx.Rect{X: x, Y: y, W: w, H: queryH}
-	u.Shape(raster.Shape{W: int(w), H: queryH, Radius: queryH / 2, Kind: raster.Ring, RingOffset: -1.5, RingWidth: 1.5},
-		box, theme.PaperA(0.30))
-	u.Icon("search", 22, 2, false, x+16, y+(queryH-22)/2, theme.Ink2)
-	u.Text(shown, queryText, x+16+22+10, u.CenterY(queryText, y, queryH), theme.Paper)
 }
 
 // percents are "0 %" to "100 %", made on first use so that drawing a

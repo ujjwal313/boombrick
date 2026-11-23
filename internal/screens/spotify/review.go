@@ -293,9 +293,9 @@ func (r *Review) Draw(u *ui.Context) {
 		if _, ok, err := r.tracks(p.URI); !ok && err != nil {
 			s = failText(err)
 		}
-		message(u, &r.msg, s, area)
+		screens.Message(u, &r.msg, s, area)
 	case len(r.rows) == 0:
-		message(u, &r.msg, "This playlist has no songs.", area)
+		screens.Message(u, &r.msg, "This playlist has no songs.", area)
 	default:
 		r.drawRows(u, top)
 	}

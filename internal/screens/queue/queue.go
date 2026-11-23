@@ -65,7 +65,7 @@ type Queue struct {
 	clock   string
 	clockAt [2]time.Duration // the seconds clock shows
 	line    string
-	lineOf  [2]string // the title and artist line shows
+	lineOf  [2]string // the title and artist line shows, or a station's song and name
 }
 
 // upRow is what a row of up next shows that takes making.
@@ -279,7 +279,8 @@ func (q *Queue) Draw(u *ui.Context) {
 
 // drawPanel draws the now-playing panel: accent border at 50 %, art, the
 // NOW PLAYING label, the title and artist, and the time. It shows what the
-// player is playing, not the screen's snapshot of the queue.
+// player is playing, not the screen's snapshot of the queue. A station shows
+// the song it sends and its name, or its name alone, and "Live" for the time.
 func (q *Queue) drawPanel(u *ui.Context, y float32) {
 	st := q.st
 	w := float32(theme.ScreenW - 2*side)
@@ -288,14 +289,23 @@ func (q *Queue) drawPanel(u *ui.Context, y float32) {
 		box, fadeTo(u.Accent.Color, 0.5))
 	widgets.Art(u, screens.TrackArt(st.Track), panelAr, 8, gfx.Rect{X: side + 12, Y: y + 12, W: panelAr, H: panelAr})
 	x := float32(side + 12 + panelAr + 16)
-	if at := [2]time.Duration{st.Elapsed / time.Second, st.Duration / time.Second}; q.clock == "" || at != q.clockAt {
-		q.clock, q.clockAt = screens.Clock(st.Elapsed)+" / "+screens.Clock(st.Duration), at
+	clock, of := "Live", [2]string{st.LiveTitle, st.Track.Title} // a station's
+	if !st.Track.Live() {
+		if at := [2]time.Duration{st.Elapsed / time.Second, st.Duration / time.Second}; q.clock == "" || at != q.clockAt {
+			q.clock, q.clockAt = screens.Clock(st.Elapsed)+" / "+screens.Clock(st.Duration), at
+		}
+		clock, of = q.clock, [2]string{st.Track.Title, st.Track.Artist}
 	}
-	if of := [2]string{st.Track.Title, st.Track.Artist}; q.line == "" || of != q.lineOf {
+	// The line is made again only when what it shows changes. With nothing to
+	// show it is "", as it is in a new Queue.
+	if of != q.lineOf {
 		q.line, q.lineOf = of[0]+" · "+of[1], of
+		if of[0] == "" { // a station sending no song: its name alone
+			q.line = of[1]
+		}
 	}
-	cw := u.TextWidth(q.clock, timeText)
-	u.Text(q.clock, timeText, side+w-16-cw, u.CenterY(timeText, y, panelH), theme.Ink2)
+	cw := u.TextWidth(clock, timeText)
+	u.Text(clock, timeText, side+w-16-cw, u.CenterY(timeText, y, panelH), theme.Ink2)
 	labelH, titleH := u.LineHeight(nowLabel), u.LineHeight(text.Body)
 	ty := y + (panelH-labelH-titleH)/2
 	u.Text("NOW PLAYING", nowLabel, x, ty, u.Accent.Color)
@@ -309,7 +319,10 @@ func (q *Queue) row(i int) *upRow {
 	if r.index == "" {
 		t := &q.upNext()[i]
 		r.index, r.art = strconv.Itoa(i+1), screens.TrackArt(*t)
-		if t.Duration > 0 {
+		switch {
+		case t.Live():
+			r.duration = "Live"
+		case t.Duration > 0:
 			r.duration = screens.Clock(t.Duration)
 		}
 	}
