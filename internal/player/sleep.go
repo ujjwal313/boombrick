@@ -137,6 +137,9 @@ func (p *Player) sleepFire(gen uint64) {
 	}
 	p.engine.FadeOut(sleepFade)
 	p.fadeEnds = p.now().Add(sleepFade)
+	if p.liveLocked() {
+		p.closeAfterFadeLocked() // paused, a station would hold its stream open
+	}
 }
 
 // fadingLocked reports whether a timed sleep's fade is under way.

@@ -33,6 +33,10 @@ type Track struct {
 	// (see SetStreaming), and Cover links to its album's picture.
 	SpotifyID string
 	Cover     string
+	// StationID is a radio station's Radio Browser ID, and Stream its
+	// stream's address. A track with a stream and no file is a station: it
+	// plays live, has no length and can't seek.
+	StationID, Stream string
 }
 
 // Pending reports whether t is a song still downloading.
@@ -41,8 +45,14 @@ func (t Track) Pending() bool { return t.Path == "" && t.VideoID != "" }
 // Streamed reports whether t is a Spotify track played as a stream.
 func (t Track) Streamed() bool { return t.Path == "" && t.SpotifyID != "" }
 
+// Live reports whether t is a radio station.
+func (t Track) Live() bool { return t.Path == "" && t.Stream != "" }
+
 // key names t's audio: its file, or its stream.
 func (t Track) key() string {
+	if t.Live() {
+		return "radio:" + t.Stream
+	}
 	if t.Streamed() {
 		return "spotify:" + t.SpotifyID
 	}
@@ -71,7 +81,8 @@ type State struct {
 	Kbps              int  // the current stream's quality, 0 for a file
 	Elapsed, Duration time.Duration
 	Rate              int    // the current file's sample rate, 0 if unknown
-	Format            string // from the file extension: "MP3", "FLAC"
+	Format            string // from the file extension, or a station's stream: "MP3", "FLAC"
+	LiveTitle         string // what the current station says is playing, if anything
 	Shuffle           bool
 	Repeat            Repeat
 	Err               error  // the last output error, which paused playback
@@ -135,9 +146,11 @@ type Player struct {
 	endFade    bool
 	after      func(time.Duration, func()) stopper // time.AfterFunc; tests stand in for it
 	now        func() time.Time
-	// Streaming: how streams open and who hears of their troubles (see
-	// SetStreaming), when the listener last skipped, and the opens under way.
+	// Streaming: how streams and stations open and who hears of their
+	// troubles (see SetStreaming and SetLive), when the listener last
+	// skipped, and the opens under way.
 	stream      StreamOpener
+	live        LiveOpener
 	notify      func(Notice)
 	skipped     time.Time
 	retried     bool // the current stream was refused and waited for once
@@ -227,15 +240,17 @@ func (p *Player) waitCuedLocked() {
 // Switches is the gate of the integrations' switches: with Spotify off its
 // streams are refused, unless downloaded copies are preferred, when the
 // stream opener plays a copy or refuses with ErrSpotifyOff; with YouTube off,
-// tracks still waiting for their download are, as the queue is held. Files
-// always play.
-func Switches(spotifyOn, youtubeOn, copies func() bool) Gate {
+// tracks still waiting for their download are, as the queue is held. With
+// Radio off, stations are refused. Files always play.
+func Switches(spotifyOn, youtubeOn, radioOn, copies func() bool) Gate {
 	return func(t Track) (string, bool) {
 		switch {
 		case t.Streamed() && !spotifyOn() && !copies():
 			return "Spotify", false
 		case t.Pending() && !youtubeOn():
 			return "YouTube", false
+		case t.Live() && !radioOn():
+			return "Radio", false
 		}
 		return "", true
 	}
@@ -400,6 +415,8 @@ func (p *Player) loadLocked(frame int64, tries int) {
 		p.waiting, p.startFrame = true, max(frame, 0)
 	case t.Streamed() && p.stream != nil:
 		p.openLocked(frame)
+	case t.Live():
+		p.openLiveLocked()
 	default:
 		p.openFileLocked(frame, tries)
 	}
@@ -504,6 +521,9 @@ func (p *Player) primeLocked() {
 		p.engine.FadeEnd(nil, 0) // a track follows now, as one was added
 		p.endFade = false
 	}
+	if p.liveLocked() {
+		return // a station never ends: nothing follows it
+	}
 	pos, ok := p.followingLocked(p.pos)
 	if !ok || p.cur == nil || p.closed {
 		return
@@ -515,6 +535,9 @@ func (p *Player) primeLocked() {
 	}
 	if t.Pending() {
 		return // primed when it lands
+	}
+	if t.Live() {
+		return // opened when reached
 	}
 	if t.Streamed() {
 		if p.stream != nil {
@@ -547,6 +570,10 @@ func (p *Player) ended(end audio.End) {
 		return // replaced while it was finishing, or the player is shutting down
 	}
 	t := p.queue[p.order[p.pos]]
+	if t.Live() {
+		p.liveEndedLocked(t, end.Err) // a station ends only when it fails
+		return
+	}
 	if end.Err != nil {
 		p.log.Warn("track ended early", "path", t.Path, "err", end.Err)
 	}
@@ -585,7 +612,8 @@ func (p *Player) ended(end audio.End) {
 
 // Toggle pauses or resumes, or plays the current track again once the queue
 // has played out. During the sleep timer's fade it keeps playing instead, at
-// full volume again.
+// full volume again. A station's stream is closed on pause, and play
+// connects again.
 func (p *Player) Toggle() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -601,6 +629,13 @@ func (p *Player) Toggle() {
 	case p.cur == nil && p.cued:
 		p.startAtLocked(p.startFrame) // a stream restored, or stopped on
 	case p.cur == nil:
+		p.startLocked()
+	case p.liveLocked() && p.playingLocked():
+		p.stopLocked()
+		p.cued = true // play connects again, to what's live now
+	case p.liveLocked():
+		// Paused by the engine, as on an output error or Release: what the
+		// stream holds is behind what's live, so it connects again.
 		p.startLocked()
 	case p.playingLocked():
 		p.engine.Pause()
@@ -630,7 +665,8 @@ func (p *Player) Next() {
 }
 
 // Prev goes back a track, or restarts the current one once it has played for
-// a few seconds or when it is the first.
+// a few seconds or when it is the first. From a station it goes back however
+// long it has played, as a station has no start to go back to.
 func (p *Player) Prev() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -639,7 +675,7 @@ func (p *Player) Prev() {
 	if len(p.queue) == 0 {
 		return
 	}
-	if p.pos > 0 && (p.cur == nil || p.elapsedLocked() <= restartAfter) {
+	if p.pos > 0 && (p.cur == nil || p.elapsedLocked() <= restartAfter || p.liveLocked()) {
 		p.pos--
 		// Back past the tracks the gate refuses, which playing would skip
 		// forward again, to where it started.
@@ -654,10 +690,14 @@ func (p *Player) Prev() {
 }
 
 // Seek moves the current track to d from its start, clamped to its length.
-// It does nothing when no track is loaded.
+// It does nothing when no track is loaded, or on a station, which plays what
+// is live.
 func (p *Player) Seek(d time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.liveLocked() {
+		return // not even ending the sleep timer's fade, as a seek would
+	}
 	p.keepPlayingLocked()
 	if p.cur == nil || p.curRate <= 0 {
 		return
@@ -941,7 +981,7 @@ func (p *Player) State() State {
 	}
 	t := p.queue[p.order[p.pos]]
 	s.Queued, s.Track, s.Index = true, t, p.pos
-	s.Waiting, s.Loading, s.Cued = p.waiting, p.loading && t.Streamed(), p.cued
+	s.Waiting, s.Loading, s.Cued = p.waiting, p.loading && (t.Streamed() || t.Live()), p.cued
 	if t.Path != p.formatOf {
 		p.format, p.formatOf = strings.ToUpper(strings.TrimPrefix(filepath.Ext(t.Path), ".")), t.Path
 	}
@@ -957,6 +997,12 @@ func (p *Player) State() State {
 	}
 	if b, ok := p.cur.(interface{ Stalled() bool }); ok {
 		s.Stalled = b.Stalled()
+	}
+	if f, ok := p.cur.(interface{ Format() string }); ok && f.Format() != "" {
+		s.Format = f.Format() // a station's, which has no file to tell
+	}
+	if l, ok := p.cur.(interface{ Title() string }); ok {
+		s.LiveTitle = l.Title()
 	}
 	st := p.engine.Status()
 	if st.Source != p.cur {
@@ -1039,6 +1085,9 @@ func (p *Player) Snapshot() (Snapshot, bool) {
 			elapsed, total = float64(s.Frame), float64(p.curFrames)
 		}
 	}
+	if p.liveLocked() {
+		s.Frame = 0 // a station plays what is live, not from where it was left
+	}
 	s.AlbumRun = p.albumRunLocked()
 	if p.playedOut {
 		s.Frame, s.Fraction = max(p.curFrames, 0), 1
@@ -1120,8 +1169,11 @@ func (p *Player) Restore(s Snapshot) bool {
 		p.waitCuedLocked()
 		return true
 	}
-	if t.Streamed() {
-		return true // opened when played: no key is asked for before then
+	if t.Live() {
+		p.startFrame = 0 // a station plays what is live
+	}
+	if t.Streamed() || t.Live() {
+		return true // opened when played: no key is asked for, nor stream held, before then
 	}
 	p.cueLocked()
 	return true
@@ -1129,10 +1181,10 @@ func (p *Player) Restore(s Snapshot) bool {
 
 // cueLocked opens the current track paused at startFrame, as a restored
 // queue starts; playback is already cued. One that won't open leaves the
-// queue stopped there.
+// queue stopped there. A stream or a station is opened only when played.
 func (p *Player) cueLocked() {
 	p.waiting = false
-	if p.queue[p.order[p.pos]].Streamed() {
+	if t := p.queue[p.order[p.pos]]; t.Streamed() || t.Live() {
 		return // opened when played
 	}
 	p.openFileLocked(p.startFrame, len(p.order))

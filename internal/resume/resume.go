@@ -84,15 +84,15 @@ func saveQueue(tx *sql.Tx, queue []player.Track) error {
 	if _, err := tx.Exec(`DELETE FROM queue`); err != nil {
 		return err
 	}
-	ins, err := tx.Prepare(`INSERT INTO queue (pos, path, title, artist, album_artist, album, gain, peak, has_gain, album_gain, album_peak, has_album_gain, duration_ms, video_id, spotify_id, cover)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	ins, err := tx.Prepare(`INSERT INTO queue (pos, path, title, artist, album_artist, album, gain, peak, has_gain, album_gain, album_peak, has_album_gain, duration_ms, video_id, spotify_id, cover, station_id, stream_url)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
 	defer ins.Close()
 	for i, t := range queue {
 		if _, err := ins.Exec(i, t.Path, t.Title, t.Artist, t.AlbumArtist, t.Album, t.Gain, t.Peak, t.HasGain,
-			t.AlbumGain, t.AlbumPeak, t.HasAlbumGain, t.Duration.Milliseconds(), t.VideoID, t.SpotifyID, t.Cover); err != nil {
+			t.AlbumGain, t.AlbumPeak, t.HasAlbumGain, t.Duration.Milliseconds(), t.VideoID, t.SpotifyID, t.Cover, t.StationID, t.Stream); err != nil {
 			return err
 		}
 	}
@@ -124,7 +124,7 @@ func Load(db *sql.DB) (s player.Snapshot, ok bool, err error) {
 		s.Order = append(s.Order, v)
 	}
 	rows, err := db.Query(`SELECT path, title, artist, album_artist, album, gain, peak, has_gain,
-		album_gain, album_peak, has_album_gain, duration_ms, video_id, spotify_id, cover FROM queue ORDER BY pos`)
+		album_gain, album_peak, has_album_gain, duration_ms, video_id, spotify_id, cover, station_id, stream_url FROM queue ORDER BY pos`)
 	if err != nil {
 		return player.Snapshot{}, false, err
 	}
@@ -133,7 +133,7 @@ func Load(db *sql.DB) (s player.Snapshot, ok bool, err error) {
 		var t player.Track
 		var ms int64
 		if err := rows.Scan(&t.Path, &t.Title, &t.Artist, &t.AlbumArtist, &t.Album, &t.Gain, &t.Peak, &t.HasGain,
-			&t.AlbumGain, &t.AlbumPeak, &t.HasAlbumGain, &ms, &t.VideoID, &t.SpotifyID, &t.Cover); err != nil {
+			&t.AlbumGain, &t.AlbumPeak, &t.HasAlbumGain, &ms, &t.VideoID, &t.SpotifyID, &t.Cover, &t.StationID, &t.Stream); err != nil {
 			return player.Snapshot{}, false, err
 		}
 		t.Duration = time.Duration(ms) * time.Millisecond

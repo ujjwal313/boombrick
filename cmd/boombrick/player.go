@@ -48,6 +48,7 @@ func newPlayer(db *sql.DB, prefs *settings.Settings, sp *spotify.Helper, online 
 	// player refuse the same tracks.
 	p.SetGate(player.Switches(func() bool { return prefs.Bool(settings.SpotifyOn) },
 		func() bool { return prefs.Bool(settings.YouTubeOn) },
+		func() bool { return prefs.Bool(settings.RadioOn) },
 		func() bool { return prefs.Bool(settings.PreferDownloaded) }))
 	return p
 }

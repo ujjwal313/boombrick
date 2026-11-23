@@ -152,6 +152,22 @@ var migrations = []string{
 	// as each stored time is now a second off. The sizes stay right for the
 	// Downloads tab while the scan runs, and Recent keeps its order.
 	`UPDATE tracks SET mtime = mtime + 1`,
+	// Radio: saved stations, and stations in the queue, which have no file
+	// but a stream.
+	`CREATE TABLE stations (
+		id           TEXT PRIMARY KEY,
+		name         TEXT NOT NULL,
+		url          TEXT NOT NULL,
+		logo         TEXT NOT NULL DEFAULT '',
+		country      TEXT NOT NULL DEFAULT '',
+		country_code TEXT NOT NULL DEFAULT '',
+		codec        TEXT NOT NULL DEFAULT '',
+		bitrate      INTEGER NOT NULL DEFAULT 0,
+		tags         TEXT NOT NULL DEFAULT '',
+		saved        INTEGER NOT NULL
+	) WITHOUT ROWID;
+	ALTER TABLE queue ADD COLUMN station_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE queue ADD COLUMN stream_url TEXT NOT NULL DEFAULT ''`,
 }
 
 func migrate(db *sql.DB) error {

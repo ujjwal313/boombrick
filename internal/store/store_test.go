@@ -220,3 +220,35 @@ func TestDownloadsTable(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStationsMigrationKeepsTheQueue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "boombrick.db")
+	old, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range append(migrations[:15:15], `PRAGMA user_version = 15`,
+		`INSERT INTO queue (pos, path, title, artist, album_artist, album, gain, peak, has_gain)
+			VALUES (0, '/m/a.mp3', 'Rust', 'Odalys', 'Odalys', 'Copper Season', 0, 0, 0)`) {
+		if _, err := old.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var title, station, stream string
+	if err := s.DB.QueryRow(`SELECT title, station_id, stream_url FROM queue`).Scan(&title, &station, &stream); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Rust" || station != "" || stream != "" {
+		t.Fatalf("row %q, %q, %q; want Rust and two empty", title, station, stream)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO stations (id, name, url, saved) VALUES ('u1', 'Radio X', 'http://s/x', 1)`); err != nil {
+		t.Fatal(err)
+	}
+}

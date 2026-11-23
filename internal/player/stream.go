@@ -19,6 +19,7 @@ type Notice struct {
 	Kind NoticeKind
 	Wait time.Duration // for Throttled, until the track is tried again
 	Off  string        // for SwitchedOff, the integration switched off
+	Name string        // for CouldNotPlay and Lost, the station's name
 }
 
 // NoticeKind is what a Notice is about.
@@ -49,6 +50,14 @@ const (
 	// Refused: a streamed track was skipped, Spotify giving the account no
 	// keys.
 	Refused
+	// CouldNotPlay: a station wouldn't connect; playback stopped on it.
+	CouldNotPlay
+	// Lost: a station dropped and didn't come back; playback stopped on it.
+	Lost
+	// SleepTimerOff: a station started with the sleep timer set to stop at
+	// the end of a track or an album, which a station never reaches, so the
+	// timer was turned off.
+	SleepTimerOff
 )
 
 const (

@@ -47,6 +47,13 @@ func TestDefaults(t *testing.T) {
 	if !s.Bool(SpotifyOn) || !s.Bool(YouTubeOn) {
 		t.Error("the integrations should default to on")
 	}
+	if !s.Bool(RadioOn) {
+		t.Error("Radio should default to on")
+	}
+	s.SetBool(RadioOn, false)
+	if s.Bool(RadioOn) {
+		t.Error("Radio should read false once switched off")
+	}
 }
 
 func TestSetPersists(t *testing.T) {

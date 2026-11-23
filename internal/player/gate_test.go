@@ -135,14 +135,18 @@ func TestEntriesPlayAgainWhenTheGateOpens(t *testing.T) {
 }
 
 func TestSwitches(t *testing.T) {
-	var spotifyOn, youtubeOn, copies bool
-	g := Switches(func() bool { return spotifyOn }, func() bool { return youtubeOn }, func() bool { return copies })
+	var spotifyOn, youtubeOn, radioOn, copies bool
+	g := Switches(func() bool { return spotifyOn },
+		func() bool { return youtubeOn },
+		func() bool { return radioOn },
+		func() bool { return copies })
 	file, stream, pending := Track{Path: "/m/a.flac"}, Track{SpotifyID: "s1"}, Track{VideoID: "v1"}
+	station := Track{Title: "Radio X", StationID: "u1", Stream: "http://s/x"}
 	for _, c := range []struct {
 		t    Track
 		off  string
 		pass bool
-	}{{file, "", true}, {stream, "Spotify", false}, {pending, "YouTube", false}} {
+	}{{file, "", true}, {stream, "Spotify", false}, {pending, "YouTube", false}, {station, "Radio", false}} {
 		if off, ok := g(c.t); off != c.off || ok != c.pass {
 			t.Errorf("%+v, both off: %q, %v", c.t, off, ok)
 		}
@@ -153,8 +157,8 @@ func TestSwitches(t *testing.T) {
 	if _, ok := g(stream); !ok {
 		t.Error("a Spotify song that may have a copy was refused")
 	}
-	spotifyOn, youtubeOn = true, true
-	for _, tr := range []Track{file, stream, pending} {
+	spotifyOn, youtubeOn, radioOn = true, true, true
+	for _, tr := range []Track{file, stream, pending, station} {
 		if _, ok := g(tr); !ok {
 			t.Errorf("%+v refused with both on", tr)
 		}

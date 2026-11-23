@@ -21,6 +21,7 @@ const (
 	// does no work, but keeps its data.
 	SpotifyOn = "integrations.spotify"
 	YouTubeOn = "integrations.youtube"
+	RadioOn   = "integrations.radio"
 )
 
 // Defaults holds the value used for a key that has never been set.
@@ -31,6 +32,7 @@ var Defaults = map[string]string{
 	VolumeLevelling:  "true",
 	SpotifyOn:        "true",
 	YouTubeOn:        "true",
+	RadioOn:          "true",
 }
 
 // Settings keeps the table in memory and writes changes behind the caller.
