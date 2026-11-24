@@ -9,4 +9,5 @@ const (
 	Downloaded
 	Spotify
 	YouTube
+	Radio
 )

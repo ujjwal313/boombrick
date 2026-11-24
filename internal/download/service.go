@@ -35,6 +35,7 @@ type Options struct {
 	Formats library.Formats
 	Online  func() bool   // nil: always online
 	Quality func() string // the download quality setting; "smaller" puts Opus 250 first
+	Hold    bool          // start held, as with YouTube switched off (see SetHeld)
 	Log     *slog.Logger
 }
 
@@ -173,6 +174,7 @@ type Service struct {
 	shut        bool           // Ready is closed
 	retrying    bool           // a write failed, and the writer will try again
 	paused      bool
+	hold        bool // YouTube is switched off: no batch begins (see SetHeld)
 	update      bool // update yt-dlp before the next batch, or now if asked from Settings
 	installing  bool
 	install     float32
@@ -224,7 +226,7 @@ func newService(opts Options, rows map[string]*row, inst installer, runner func(
 		ctx: ctx, cancel: cancel,
 		wake: make(chan struct{}, 1), land: make(chan struct{}, 1), flushes: make(chan struct{}, 1),
 		ready: make(chan struct{}, 1), tool: make(chan struct{}, 1), rows: rows, filed: filed, dirty: map[string]bool{},
-		scrap: map[string]bool{}, live: map[string]Event{}, netFails: map[string]int{}, clock: clock, version: 1,
+		scrap: map[string]bool{}, live: map[string]Event{}, netFails: map[string]int{}, clock: clock, version: 1, hold: opts.Hold,
 		fin: &finisher{db: opts.DB, music: opts.Music, http: opts.HTTP, albums: opts.Albums, lyrics: opts.Lyrics,
 			formats: opts.Formats, remux: remux.File, log: opts.Log}}
 }
@@ -423,6 +425,22 @@ func (s *Service) SetPaused(on bool) {
 	s.notify()
 }
 
+// SetHeld holds or releases the queue, as YouTube is switched off and on: no
+// batch begins while it is held, but one under way finishes. Holding is
+// separate from the user's pause, which it leaves as it is.
+func (s *Service) SetHeld(on bool) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.hold = on
+	s.queueChangedLocked()
+	s.mu.Unlock()
+	signal(s.wake)
+	s.notify()
+}
+
 // Search searches YouTube with yt-dlp, for when YouTube Music's own search
 // can't be read. It needs yt-dlp installed. yt-dlp runs one at a time, so a
 // batch under way is stopped for it and starts again after, resuming its
@@ -528,6 +546,8 @@ func (s *Service) Note() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
+	case s.hold:
+		return "YouTube is off"
 	case s.paused:
 		return "Downloads paused"
 	case s.installing || s.waiting == waitDownloader:
@@ -1000,7 +1020,7 @@ func (s *Service) next() ([]string, uint64, time.Duration) {
 	s.mu.Lock()
 	ids := s.queuedLocked()
 	ver := s.queueVer
-	paused, update, asked, searching := s.paused, s.update, s.asked, s.searching > 0
+	paused, update, asked, searching := s.paused || s.hold, s.update, s.asked, s.searching > 0
 	rest := time.Until(s.netRest)
 	s.mu.Unlock()
 	// Nothing to download, though Settings may have asked for yt-dlp.
@@ -1149,7 +1169,7 @@ func (s *Service) run(ids []string, ver uint64) {
 	ctx, stop := context.WithCancel(s.ctx)
 	defer stop()
 	s.mu.Lock()
-	if s.closed || s.paused || s.queueVer != ver || s.searching > 0 {
+	if s.closed || s.paused || s.hold || s.queueVer != ver || s.searching > 0 {
 		s.mu.Unlock()
 		return
 	}

@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/platform/input"
+	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/uitest"
+	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
 func TestMain(m *testing.M) { uitest.Main(m) }
@@ -99,12 +101,88 @@ func TestTabsKeepTheirStacks(t *testing.T) {
 	if !slices.Equal(tabs[1].got, []input.Button{input.A}) {
 		t.Fatal("input should go to the new tab's page")
 	}
-	if s.handle(press(input.R1), t0) {
-		t.Fatal("R1 on the last tab does nothing")
+	if !s.handle(press(input.R1), t0) || s.tab != 0 {
+		t.Fatal("R1 on the last tab should wrap to the first")
 	}
-	s.handle(press(input.L1), t0)
 	if len(s.stacks[0]) != 2 {
 		t.Fatal("switching tabs keeps each tab's stack")
+	}
+}
+
+func sixTabs() (*shell, []*page) {
+	var tabs []*page
+	var roots []screens.Screen
+	for _, n := range []string{"home", "library", "spotify", "youtube", "downloads", "radio"} {
+		p := &page{name: n}
+		tabs = append(tabs, p)
+		roots = append(roots, p)
+	}
+	return newShell(roots...), tabs
+}
+
+func TestL1AndR1WrapAround(t *testing.T) {
+	s, _ := sixTabs()
+	if !s.handle(press(input.L1), t0) || s.tab != widgets.TabRadio {
+		t.Fatalf("L1 on the first tab went to %d, want the last", s.tab)
+	}
+	if !s.handle(press(input.R1), t0) || s.tab != widgets.TabHome {
+		t.Fatalf("R1 on the last tab went to %d, want the first", s.tab)
+	}
+}
+
+func TestHiddenTabsAreSkipped(t *testing.T) {
+	s, _ := sixTabs()
+	s.setShown([]int{widgets.TabHome, widgets.TabLibrary, widgets.TabSpotify})
+	s.handle(press(input.R1), t0)
+	s.handle(press(input.R1), t0)
+	if s.tab != widgets.TabSpotify {
+		t.Fatalf("two R1s went to %d, want Spotify", s.tab)
+	}
+	if s.handle(press(input.R1), t0); s.tab != widgets.TabHome {
+		t.Fatalf("R1 on the last tab shown went to %d, want Home", s.tab)
+	}
+	s.showTab(widgets.TabDownloads, t0)
+	if s.tab != widgets.TabHome {
+		t.Fatalf("showing a hidden tab moved to %d", s.tab)
+	}
+}
+
+func TestShowingAHiddenTabKeepsTheOverlayOpen(t *testing.T) {
+	s, _ := sixTabs()
+	np := &page{name: "now playing"}
+	s.overlays = []overlay{{button: input.Start, screen: np}}
+	s.setShown([]int{widgets.TabHome, widgets.TabLibrary})
+	s.openOverlay(0, t0)
+	s.showTab(widgets.TabDownloads, t0)
+	if s.open != 0 {
+		t.Fatal("asking for a hidden tab should change nothing")
+	}
+}
+
+func TestHidingTheCurrentTabGoesHome(t *testing.T) {
+	s, tabs := sixTabs()
+	s.showTab(widgets.TabSpotify, t0)
+	s.push(&page{name: "playlist"}, t0)
+	s.setShown([]int{widgets.TabHome, widgets.TabLibrary, widgets.TabYouTube, widgets.TabDownloads})
+	if s.tab != widgets.TabHome {
+		t.Fatalf("with Spotify hidden the tab is %d, want Home", s.tab)
+	}
+	s.handle(press(input.A), t0)
+	if !slices.Equal(tabs[widgets.TabHome].got, []input.Button{input.A}) {
+		t.Fatal("input should go to Home")
+	}
+	s.setShown(nil)
+	s.showTab(widgets.TabSpotify, t0)
+	if len(s.stacks[widgets.TabSpotify]) != 2 {
+		t.Fatal("a hidden tab keeps its pages")
+	}
+}
+
+func TestOneTabShownDoesNotSwitch(t *testing.T) {
+	s, _ := sixTabs()
+	s.setShown([]int{widgets.TabHome})
+	if s.handle(press(input.R1), t0) || s.tab != widgets.TabHome {
+		t.Fatal("with one tab, R1 has nowhere to go")
 	}
 }
 

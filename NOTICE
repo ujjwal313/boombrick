@@ -34,6 +34,9 @@ It includes or links the following third-party components:
   QuickJS-NG                   MIT                   https://github.com/quickjs-ng/quickjs (v0.17.0)
   yt-dlp                       Unlicense             https://github.com/yt-dlp/yt-dlp
                                Downloaded on first use; not shipped in the pak
+  Noto fonts for other scripts SIL OFL 1.1           https://github.com/notofonts
+  and Noto Emoji               Downloaded the first time text needs them, cut down, from
+                               the fonts release with their licences; not shipped in the pak
 
 The Spotify helper, bin/boombrick-spotify, includes or links:
 

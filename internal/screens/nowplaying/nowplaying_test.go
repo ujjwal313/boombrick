@@ -1,6 +1,7 @@
 package nowplaying
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -20,14 +21,16 @@ type fake struct {
 	st                             player.State
 	toggles, nexts, prevs, repeats int
 	shuffles                       []bool
+	seeks                          []time.Duration
 }
 
-func (f *fake) State() player.State { return f.st }
-func (f *fake) Toggle()             { f.toggles++ }
-func (f *fake) Next()               { f.nexts++ }
-func (f *fake) Prev()               { f.prevs++ }
-func (f *fake) SetShuffle(on bool)  { f.shuffles = append(f.shuffles, on) }
-func (f *fake) CycleRepeat()        { f.repeats++ }
+func (f *fake) State() player.State  { return f.st }
+func (f *fake) Toggle()              { f.toggles++ }
+func (f *fake) Next()                { f.nexts++ }
+func (f *fake) Prev()                { f.prevs++ }
+func (f *fake) SetShuffle(on bool)   { f.shuffles = append(f.shuffles, on) }
+func (f *fake) CycleRepeat()         { f.repeats++ }
+func (f *fake) Seek(d time.Duration) { f.seeks, f.st.Elapsed = append(f.seeks, d), d }
 
 var t0 = time.Unix(1000, 0)
 
@@ -102,6 +105,50 @@ func TestShouldersChangeTrack(t *testing.T) {
 	n.Handle(press(input.R1), t0)
 	if f.prevs != 1 || f.nexts != 2 {
 		t.Fatalf("prevs %d, nexts %d", f.prevs, f.nexts)
+	}
+}
+
+// L2 and R2 seek: a tap 10 s at once; held, the progress bar runs on, and
+// letting go seeks to where it got.
+func TestTriggersSeek(t *testing.T) {
+	f := playing()
+	n := New(f)
+	if !n.Handle(press(input.R2), t0) || len(f.seeks) != 1 || f.seeks[0] != 103*time.Second {
+		t.Fatalf("R2 seeked %v, want 1:43", f.seeks)
+	}
+	if !n.Animating(t0) {
+		t.Fatal("no frames asked for while R2 is down")
+	}
+	held := t0.Add(1400 * time.Millisecond) // a second's scrub: 20 s on
+	if got := n.scrub.Shown(f.st, held).Elapsed; got != 123*time.Second {
+		t.Fatalf("the progress bar shows %v while scrubbing, want 2:03", got)
+	}
+	if !n.Handle(input.Event{Button: input.R2, Kind: input.Release}, held) || len(f.seeks) != 2 || f.seeks[1] != 123*time.Second {
+		t.Fatalf("seeks %v, want 2:03 when let go", f.seeks)
+	}
+	if n.Animating(held) {
+		t.Fatal("still asking for frames once R2 is let go")
+	}
+}
+
+// R2 let go while another screen or the quick menu has the buttons drops the
+// scrub.
+func TestScrubDroppedWithR2Up(t *testing.T) {
+	f := playing()
+	n := New(f)
+	n.SetHeld(func(input.Button) bool { return false })
+	n.Handle(press(input.R2), t0)
+	if n.Animating(t0.Add(time.Second)) {
+		t.Fatal("scrubbing with R2 up")
+	}
+}
+
+func TestHintsShowSeeking(t *testing.T) {
+	f := playing()
+	n := New(f)
+	h := n.hints(f.st)
+	if last := h[len(h)-1]; last.Key != "L2/R2" || last.Label != "Seek" {
+		t.Fatalf("the last hint is %s %s, want L2/R2 Seek", last.Key, last.Label)
 	}
 }
 
@@ -311,6 +358,135 @@ func TestBadgeSaysWhereTheTrackIsFrom(t *testing.T) {
 		if got := source(c.t); got != c.want {
 			t.Errorf("source(%+v) = %v, want %v", c.t, got, c.want)
 		}
+	}
+}
+
+// station is Radio City playing, sending the song it plays.
+func station() *fake {
+	return &fake{st: player.State{
+		Queued: true, Playing: true, Count: 5,
+		Track: player.Track{Title: "Radio City", Artist: "India", Cover: "https://logos.radio.test/city.png",
+			StationID: "96062a7b-0601-11e8-ae97-52543be04c81", Stream: "http://stream.radio.test/city"},
+		LiveTitle: "Monsoon Letters", Elapsed: 93 * time.Second, Rate: 44100, Format: "MP3", Kbps: 128,
+	}}
+}
+
+// A station shows its song over its name and country, or with no song its
+// name over its country; the Live pill stands in for the progress bar, and
+// says when the stream is opening. Paused, the pill is drawn in ink3.
+func TestGoldenStation(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		edit func(s *player.State)
+	}{
+		{"nowplaying-station-title", func(*player.State) {}},
+		{"nowplaying-station", func(s *player.State) {
+			s.Playing, s.LiveTitle, s.Format, s.Kbps, s.Rate = false, "", "", 0, 0
+		}},
+		{"nowplaying-station-connecting", func(s *player.State) {
+			s.Loading, s.LiveTitle, s.Format, s.Kbps, s.Rate, s.Elapsed = true, "", "", 0, 0, 0
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := station()
+			c.edit(&f.st)
+			u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+			u.Accent = theme.Fallback()
+			u.Status = fixture.Status()
+			u.Now = t0
+			n := New(f)
+			n.SetLyrics(func() {})
+			n.Draw(u)
+			uitest.Golden(t, c.name, off.Image())
+		})
+	}
+}
+
+// A station has no lyrics and can't seek: Y, L2 and R2 do nothing, Down
+// finds no Lyrics pill, and the hints leave them out. A song after it has
+// them back.
+func TestStationHasNoLyricsOrSeek(t *testing.T) {
+	f := station()
+	n := New(f)
+	opened := 0
+	n.SetLyrics(func() { opened++ })
+	for _, b := range []input.Button{input.Y, input.L2, input.R2, input.Down} {
+		if n.Handle(press(b), t0) {
+			t.Errorf("%v did something on a station", b)
+		}
+		n.Handle(input.Event{Button: b, Kind: input.Release}, t0)
+	}
+	if opened != 0 || len(f.seeks) != 0 || n.focus != playCtl {
+		t.Fatalf("opened Lyrics %d times, seeked %v, focus on %d", opened, f.seeks, n.focus)
+	}
+	want := []widgets.Hint{{Key: "A", Label: "Pause"}, {Key: "B", Label: "Back"}, {Key: "L1/R1", Label: "Track"}}
+	if h := n.hints(f.st); !slices.Equal(h, want) {
+		t.Fatalf("a station's hints %v, want %v", h, want)
+	}
+	f.st = playing().st
+	h := n.hints(f.st)
+	if !slices.Contains(h, widgets.Hint{Key: "Y", Label: "Lyrics"}) || h[len(h)-1] != (widgets.Hint{Key: "L2/R2", Label: "Seek"}) {
+		t.Fatalf("a song after the station has the hints %v", h)
+	}
+}
+
+// Focus left on the Lyrics pill while a song played goes back to play/pause
+// for a station, so A doesn't open Lyrics.
+func TestStationTakesFocusOffTheLyricsPill(t *testing.T) {
+	f := playing()
+	n := New(f)
+	opened := 0
+	n.SetLyrics(func() { opened++ })
+	n.Handle(press(input.Down), t0)
+	f.st = station().st
+	n.Handle(press(input.A), t0)
+	if opened != 0 || f.toggles != 1 || n.focus != playCtl {
+		t.Fatalf("A on a station opened Lyrics %d times and paused %d times; focus on %d", opened, f.toggles, n.focus)
+	}
+}
+
+// A station's badge is Radio's, and its format line the codec and, when the
+// station gives one, the bitrate.
+func TestStationFormatLine(t *testing.T) {
+	s := station().st
+	if got := source(s.Track); got != media.Radio {
+		t.Fatalf("badge %v", got)
+	}
+	if got := formatLine(s); got != "MP3 · 128 kbps" {
+		t.Fatalf("format line %q", got)
+	}
+	s.Kbps = 0
+	if got := formatLine(s); got != "MP3" {
+		t.Fatalf("with no bitrate: format line %q", got)
+	}
+}
+
+// A station has no progress bar: it asks for a frame a second, enough to
+// show its song or its connecting within a second, where a song asks for 4.
+func TestStationTicksEverySecond(t *testing.T) {
+	f := playing()
+	n := New(f)
+	if got := n.Tick(); got != 250*time.Millisecond {
+		t.Fatalf("a song ticks every %v, want 250ms", got)
+	}
+	f.st = station().st
+	if got := n.Tick(); got != time.Second {
+		t.Fatalf("a station ticks every %v, want 1s", got)
+	}
+}
+
+// A station's frames allocate nothing either: its name and country, its
+// format line and its hint bar are made when they change.
+func TestStationFramesDrawnAgainAllocateNothing(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.Status = fixture.Status()
+	u.Now = t0
+	f := station()
+	n := New(f)
+	n.SetLyrics(func() {})
+	n.Draw(u)
+	if a := testing.AllocsPerRun(10, func() { n.Draw(u) }); a != 0 {
+		t.Fatalf("a frame allocates %v times", a)
 	}
 }
 

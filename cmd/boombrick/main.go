@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,11 +17,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ujjwal313/boombrick/assets"
 	"github.com/ujjwal313/boombrick/internal/app"
 	"github.com/ujjwal313/boombrick/internal/art"
 	"github.com/ujjwal313/boombrick/internal/audio/decode"
 	"github.com/ujjwal313/boombrick/internal/background"
 	"github.com/ujjwal313/boombrick/internal/download"
+	"github.com/ujjwal313/boombrick/internal/fonts"
 	"github.com/ujjwal313/boombrick/internal/importer"
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/logx"
@@ -29,6 +32,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/perf"
 	"github.com/ujjwal313/boombrick/internal/platform"
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/radio"
 	"github.com/ujjwal313/boombrick/internal/release"
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/selfupdate"
@@ -36,6 +40,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/space"
 	"github.com/ujjwal313/boombrick/internal/spotify"
 	"github.com/ujjwal313/boombrick/internal/store"
+	"github.com/ujjwal313/boombrick/internal/ui/text"
 	"github.com/ujjwal313/boombrick/internal/version"
 	"github.com/ujjwal313/boombrick/internal/ytmusic"
 )
@@ -121,6 +126,7 @@ func run(started time.Time) error {
 	// music is looked up online while the device is. They close after the
 	// player, so the music stops at once on quitting, and before the database.
 	web := netx.NewClient()
+	rc := radio.NewClient(web, net.DefaultResolver)
 	covers := art.New(art.Options{
 		DB:     db.DB,
 		Dir:    filepath.Join(paths.Data, "cache", "art"),
@@ -129,10 +135,38 @@ func run(started time.Time) error {
 		Log:    log,
 	})
 	defer covers.Close()
+	// Fonts for other scripts and emoji come from the fonts release the first
+	// time text needs one: on screen, in the library after a scan, or in
+	// lyrics as they are found. Each release's are kept in a folder of their
+	// own, and older releases' removed. The store closes after the app.
+	fontsDir := filepath.Join(paths.Data, "fonts")
+	if err := fonts.Prune(fontsDir, text.FontsRelease); err != nil {
+		log.Warn("remove old fonts", "err", err)
+	}
+	fontStore := fonts.New(fonts.Options{Dir: filepath.Join(fontsDir, text.FontsRelease), HTTP: web,
+		Base:  fonts.Release(text.FontsRelease),
+		Fonts: text.Catalog, Online: online, Log: log})
+	defer fontStore.Close()
+	needs, err := text.NewNeeds(assets.Fonts(), text.Catalog)
+	if err != nil {
+		return err
+	}
+	fetchFonts := func(ss ...string) {
+		for _, s := range ss {
+			for _, name := range needs.Of(s, fontStore.Has) {
+				fontStore.Want(name)
+			}
+		}
+	}
 	words := lyrics.New(lyrics.Options{DB: db.DB, Fetch: lyrics.NewClient(web), Online: online, Log: log,
 		FileOf: func(id string) (string, bool) {
 			path, ok, err := library.FileOf(db.DB, id)
 			return path, ok && err == nil
+		},
+		Found: func(l lyrics.Lyrics) {
+			for _, line := range l.Lines {
+				fetchFonts(line.Text)
+			}
 		}})
 	defer words.Close()
 	// YouTube Music is asked, its thumbnails fetched and its songs downloaded
@@ -143,7 +177,9 @@ func run(started time.Time) error {
 	qjs := quickJS(dir)
 	dl, err := download.New(download.Options{DB: db.DB, Music: paths.Music, Data: paths.Data, QJS: qjs,
 		HTTP: web, Albums: ytc, Lyrics: lyrics.NewClient(web), Formats: formats, Online: online,
-		Quality: func() string { return prefs.String(settings.DownloadQuality) }, Log: log})
+		Quality: func() string { return prefs.String(settings.DownloadQuality) }, Log: log,
+		// With YouTube switched off, nothing queued is fetched.
+		Hold: !prefs.Bool(settings.YouTubeOn)})
 	if err != nil {
 		return err
 	}
@@ -155,14 +191,15 @@ func run(started time.Time) error {
 	// Music, a search a second, and downloading the matches. The importer
 	// closes before the queue it fills.
 	im, err := importer.New(importer.Options{DB: db.DB, Search: ytc.Search, Get: dl.Get, State: dl.State,
-		Remove: dl.Remove, Online: online, Log: log})
+		Remove: dl.Remove, Online: online, Log: log,
+		Off: !prefs.Bool(settings.SpotifyOn) || !prefs.Bool(settings.YouTubeOn)})
 	if err != nil {
 		return err
 	}
 	defer im.Close()
 	// Settings' Storage page measures and clears the caches off the UI
 	// thread; the meter closes before the caches it reaches into.
-	meter := space.New(space.Options{Art: covers, Lyrics: words,
+	meter := space.New(space.Options{Art: covers, Lyrics: words, Fonts: fontStore,
 		Parts:      space.Funcs{SizeOf: dl.Leftovers, Empty: dl.ClearLeftovers},
 		Downloader: filepath.Join(paths.Data, "bin"), Log: log})
 	defer meter.Close()
@@ -201,14 +238,25 @@ func run(started time.Time) error {
 	spLib := spotify.NewLibrary(sp, db.DB, log)
 	defer spLib.Close()
 
+	// The radio stations the Radio tab lists, and the ones saved. Both close
+	// after the app, whose loop has ended by then, and before the database:
+	// closing the saved stations waits for the writes still queued.
+	directory := radio.NewDirectory(rc, log)
+	defer directory.Close()
+	kept, err := radio.NewStations(db.DB, log)
+	if err != nil {
+		return err
+	}
+	defer kept.Close()
+
 	notices := make(chan player.Notice, 8)
-	p := newPlayer(db.DB, prefs, sp, online, log, func(n player.Notice) {
+	p := newPlayer(db.DB, prefs, sp, rc, online, log, func(n player.Notice) {
 		select {
 		case notices <- n:
 		default: // a burst of them: the toast shows the latest anyway
 		}
 	})
-	defer p.Close()
+	defer closePlayer(p, log)
 
 	// A background player gives the music back before the saved queue is
 	// read; neither must hold up the first frame. Every later release keeps
@@ -300,6 +348,12 @@ func run(started time.Time) error {
 				dl.Prune()
 			}
 			tell(app.ScanUpdate{Changed: changed, Ended: true})
+			// The fonts the library's names need, fetched before they show.
+			if texts, err := library.Texts(db.DB); err == nil {
+				fetchFonts(texts...)
+			} else {
+				log.Warn("read the library's names", "err", err)
+			}
 		}
 	}()
 	rescan := func() {
@@ -332,6 +386,7 @@ func run(started time.Time) error {
 		Started:    started,
 		Player:     p,
 		MusicDir:   paths.Music,
+		MusicPlace: prof.MusicPlace(),
 		Load:       func() (*library.Index, error) { return library.Load(db.DB) },
 		Progress:   func() ([]resume.Progress, error) { return resume.Recent(db.DB, 8) },
 		Rescan:     rescan,
@@ -354,6 +409,7 @@ func run(started time.Time) error {
 		FirmwarePower: prof.FirmwarePower(),
 		QuitChord:     prof.QuitChord(),
 		Pads:          prof.Pads(),
+		Fonts:         fontStore,
 		Version:       version.Version,
 		Device:        "TrimUI Brick",
 		ToolReleases:  toolReleases,
@@ -362,7 +418,11 @@ func run(started time.Time) error {
 		Perf:          rec,
 		Notices:       notices,
 		Spotify:       spLib,
+		Radio:         directory,
+		Stations:      kept,
 		Importer:      im,
+		Hold:          dl.SetHeld,
+		ImportOn:      im.SetEnabled,
 		Background: func() error {
 			exe, err := os.Executable()
 			if err != nil {

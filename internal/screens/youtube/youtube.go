@@ -17,8 +17,8 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ytmusic"
 )
 
-// tab is the YouTube tab's place in the tab row.
-const tab = 3
+// tab is the YouTube tab's ID.
+const tab = widgets.TabYouTube
 
 // Source is YouTube Music as these screens ask it: each call returns what
 // has come and asks for what hasn't. *ytmusic.Searcher is one.

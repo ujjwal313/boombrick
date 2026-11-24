@@ -39,6 +39,7 @@ var (
 		shufflePill: {{Key: "A", Label: "Shuffle"}, {Key: "Y", Label: "Add to queue"}, backHint, tabsHint},
 	}
 	importHint     = widgets.Hint{Key: "X", Label: "Import"}
+	songImportHint = widgets.Hint{Key: "X", Label: "Import song"}
 	waitHints      = []widgets.Hint{backHint, tabsHint}
 	retryPageHints = []widgets.Hint{{Key: "X", Label: "Retry"}, backHint, tabsHint}
 )
@@ -53,7 +54,8 @@ type PlaylistPage struct {
 	art    widgets.ArtSpec
 	have   bool
 	err    error // why there are no songs yet
-	queue  []player.Track
+	tracks []spotify.Track
+	queue  []player.Track // tracks, to play
 	rows   []widgets.Row
 	arts   []widgets.ArtSpec
 	count  string // "42 songs · 2 h 31 min", once the songs have come
@@ -94,7 +96,7 @@ func (pg *PlaylistPage) load() {
 	if !have {
 		return
 	}
-	pg.have, pg.queue = true, Tracks(ts)
+	pg.have, pg.tracks, pg.queue = true, ts, Tracks(ts)
 	pg.arts = make([]widgets.ArtSpec, len(ts))
 	pg.rows = make([]widgets.Row, len(ts))
 	var length time.Duration
@@ -119,8 +121,8 @@ func (pg *PlaylistPage) load() {
 }
 
 // Handle moves between the pills and the songs, plays with A and queues
-// with Y. X imports the playlist, or asks again for songs that couldn't be
-// had.
+// with Y. X imports the playlist from the pills and the song focused from
+// the songs, or asks again for songs that couldn't be had.
 func (pg *PlaylistPage) Handle(ev input.Event, now time.Time) bool {
 	if ev.Kind == input.Release {
 		return false
@@ -136,6 +138,8 @@ func (pg *PlaylistPage) Handle(ev input.Event, now time.Time) bool {
 			switch {
 			case !pg.have && pg.err != nil:
 				pg.e.Src.Retry()
+			case pg.have && pg.e.CanImport() && pg.onList:
+				pg.e.Nav.Push(NewSongReview(pg.e, pg.tracks[pg.list.Focus()]))
 			case pg.have && pg.e.CanImport():
 				pg.e.Nav.Push(NewReview(pg.e, []spotify.Playlist{pg.pl}, true))
 			default:
@@ -249,7 +253,7 @@ func (pg *PlaylistPage) Draw(u *ui.Context) {
 		case pg.err != nil:
 			s, hints = failText(pg.err), retryPageHints
 		}
-		message(u, &pg.msg, s, gfx.Rect{X: screens.PageListX, Y: screens.ContentTop,
+		screens.Message(u, &pg.msg, s, gfx.Rect{X: screens.PageListX, Y: screens.ContentTop,
 			W: theme.ScreenW - screens.Side - screens.PageListX, H: screens.ContentBot - screens.ContentTop})
 	}
 	widgets.StatusBar(u)
@@ -271,12 +275,12 @@ func (pg *PlaylistPage) songHints() []widgets.Hint {
 	if h, ok := pg.hints[k]; ok {
 		return h
 	}
-	h := trackHints
+	h, x := trackHints, songImportHint
 	if !pg.onList {
-		h = pillHints[pg.pill]
+		h, x = pillHints[pg.pill], importHint
 	}
 	if imp {
-		h = append(append(h[:2:2], importHint), h[2:]...)
+		h = append(append(h[:2:2], x), h[2:]...)
 	}
 	pg.hints[k] = h
 	return h

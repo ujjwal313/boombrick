@@ -136,6 +136,19 @@ func TestIndexBySpotifyID(t *testing.T) {
 	}
 }
 
+func TestAlbumOf(t *testing.T) {
+	ix := NewIndex([]Album{
+		{Artist: "Odalys", Title: "Copper Season", Tracks: []Track{{Path: "/a/1"}, {Path: "/a/2"}}},
+		{Artist: "Kenji Arata", Title: "Afterhours", Tracks: []Track{{Path: "/b/1"}}},
+	})
+	if a := ix.AlbumOf("/a/2"); a == nil || a.Title != "Copper Season" {
+		t.Fatalf("AlbumOf(/a/2) = %+v", a)
+	}
+	if a := ix.AlbumOf("/c/1"); a != nil {
+		t.Fatalf("a file not in the library is in %+v", a)
+	}
+}
+
 func equal(got []string, want ...string) bool {
 	if len(got) != len(want) {
 		return false

@@ -2,6 +2,7 @@
 package app
 
 import (
+	"cmp"
 	"fmt"
 	"image/color"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/platform"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/radio"
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/screens/browse"
@@ -30,6 +32,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/screens/nowplaying"
 	"github.com/ujjwal313/boombrick/internal/screens/queue"
 	"github.com/ujjwal313/boombrick/internal/screens/quickmenu"
+	radioscreen "github.com/ujjwal313/boombrick/internal/screens/radio"
 	settingsscreen "github.com/ujjwal313/boombrick/internal/screens/settings"
 	spotifyscreen "github.com/ujjwal313/boombrick/internal/screens/spotify"
 	"github.com/ujjwal313/boombrick/internal/screens/youtube"
@@ -38,6 +41,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/gfx"
 	"github.com/ujjwal313/boombrick/internal/ui/text"
+	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
 // Options configure the app.
@@ -47,6 +51,7 @@ type Options struct {
 	Started    time.Time // process start, for the launch-time log line
 	Player     *player.Player
 	MusicDir   string // shown by the empty library
+	MusicPlace string // where MusicDir is, in words, for the empty library; "" for the SD card's Music folder
 	// Load reads the library and Progress the albums in progress; the app calls
 	// them on a goroutine. Rescan asks for a scan. Scanned receives an update
 	// when a scan has written to the library, at most every few seconds while
@@ -101,6 +106,9 @@ type Options struct {
 	QuitChord bool
 	// Pads is how the firmware hands over the Brick's buttons.
 	Pads input.Layout
+	// Fonts holds the fonts downloaded for other scripts and emoji, and
+	// fetches those text needs; nil draws such text as missing.
+	Fonts Fonts
 	// Version and Device are shown at the foot of Settings.
 	Version, Device string
 	// ToolReleases and Releases find yt-dlp's and Boombrick's latest
@@ -121,10 +129,19 @@ type Options struct {
 	// Importer imports Spotify playlists to downloads. Without it, or
 	// without Spotify or Downloads, nothing offers an import.
 	Importer Importer
+	// Radio is the station directory, and Stations the stations saved. Without
+	// Radio there is no Radio tab and no Radio switch.
+	Radio    *radio.Directory
+	Stations *radio.Stations
 	// Background hands the music to the background player, and returns once
 	// it plays; the app then quits. Without it the quick menu has no Play in
 	// background.
 	Background func() error
+	// Hold holds the download queue while YouTube is switched off, and
+	// ImportOn switches the importer, on while Spotify and YouTube both are.
+	// The app calls them as it starts and each time a switch changes.
+	Hold     func(on bool)
+	ImportOn func(on bool)
 }
 
 // Releases is what the app needs from a release checker. *release.Checker
@@ -151,6 +168,13 @@ type Space interface {
 type Backlight interface {
 	Off() error
 	On() error
+}
+
+// Fonts keeps the fonts downloaded for other scripts and emoji, and fetches
+// those text asks for. *fonts.Store is one.
+type Fonts interface {
+	text.Source
+	Ready() <-chan struct{} // receives when a font has arrived
 }
 
 // Volume is what the app tells the volume watcher, which tells the app of a
@@ -212,9 +236,11 @@ type App struct {
 	mapper     input.Mapper
 	pads       map[sdl.JoystickID]map[uint8]bool // those read as game controllers, with the joystick buttons their mappings use
 	repeat     *input.Repeater
+	down       [input.VolDown + 1]bool // the buttons down, by their last events
 	home       *home.Home
 	nowPlaying *nowplaying.NowPlaying
-	music      transport // the player, for the buttons heard with the screen off
+	music      transport                              // the player, for the buttons heard with the screen off
+	play       func(tracks []player.Track, start int) // starts the tracks at one, as Home's stations do
 	library    *browse.Library
 	queue      *queue.Queue
 	shell      *shell
@@ -228,6 +254,7 @@ type App struct {
 	redraw     atomic.Bool  // lyrics, YouTube Music's answers, Settings' meter or releases, or an import have news to draw
 	downloaded atomic.Bool  // the download queue changed since poll last looked
 	landed     atomic.Bool  // and downloads landed, to show in the library
+	fontsIn    atomic.Bool  // and fonts arrived, for text that drew as missing
 	skipped    atomic.Bool  // and a queued song was dropped, its download failed
 	spotified  atomic.Bool  // the Spotify library has news
 	handFailed atomic.Bool  // handing the music over failed, for poll to say
@@ -239,7 +266,6 @@ type App struct {
 	dark       bool      // the screen is off: nothing is drawn and only Power is heard
 	lightOff   bool      // the backlight was turned off, to be turned on again
 	powerAt    time.Time // when Power went down, while it is held
-	menuHeld   bool      // Menu is down, for the quit chord
 	scanEnded  bool      // a scan has ended, so an empty index is the library
 	wasAnim    bool
 	// Spotify: the session-expired dialog, whether it has opened since the
@@ -250,6 +276,7 @@ type App struct {
 	expiredOnce bool
 	playlists   []spotify.Playlist
 	progress    []resume.Progress
+	stationsAt  uint64 // the saved stations' version Home was last built from
 
 	loads *loader
 	// set by the forwarding goroutines, taken by poll
@@ -308,6 +335,9 @@ func New(opts Options) (*App, error) {
 		sdl.Quit()
 		return nil, err
 	}
+	if opts.Fonts != nil {
+		fonts.UseDownloads(opts.Fonts, text.Catalog)
+	}
 	u := ui.NewContext(gfx.New(r), fonts, theme.Scale)
 	// Until the first reading, which comes within a frame or so: no battery,
 	// and the Wi-Fi icon rather than the Offline warning.
@@ -336,10 +366,12 @@ func New(opts Options) (*App, error) {
 	a.grounds = newGrounds(a.fade.target(), renderGrounds, a.wake)
 	if opts.Player != nil {
 		a.music = opts.Player
+		a.play = opts.Player.Play
 	}
 	if opts.Status != nil {
 		a.reader.Go(func() { watchStatus(opts.Status, statusEvery, a.statuses, a.wake, a.lit, a.stop) })
 	}
+	screens.SetMusicPlace(opts.MusicPlace)
 	a.home.SetEmpty(opts.MusicDir, func() { a.rescan(); a.Toast(screens.Scanning) })
 	a.library = browse.New(a, opts.Player, opts.MusicDir, a.rescan)
 	a.loads = newLoader(opts.Load, opts.Progress, a.wake)
@@ -359,6 +391,9 @@ func New(opts Options) (*App, error) {
 	if opts.Saved != nil {
 		a.forward(opts.Saved, &a.saves)
 	}
+	if opts.Fonts != nil {
+		a.forward(opts.Fonts.Ready(), &a.fontsIn)
+	}
 	if opts.Covers != nil || opts.Thumbs != nil {
 		c := allCovers{web: opts.Thumbs}
 		if opts.Covers != nil {
@@ -373,7 +408,7 @@ func New(opts Options) (*App, error) {
 	if opts.MusicDir != "" {
 		screens.SetDownloadsDir(filepath.Join(opts.MusicDir, "Boombrick"))
 	}
-	var ytTab, dlTab screens.Screen = &screens.Placeholder{Tab: 3, Title: "YouTube"}, &screens.Placeholder{Tab: 4, Title: "Downloads"}
+	var ytTab, dlTab screens.Screen = &screens.Placeholder{Tab: widgets.TabYouTube, Title: "YouTube"}, &screens.Placeholder{Tab: widgets.TabDownloads, Title: "Downloads"}
 	var acts youtube.Downloads // stays nil without a queue
 	if opts.Downloads != nil {
 		acts = ytActions{dl: opts.Downloads, p: opts.Player, toast: a.Toast}
@@ -393,20 +428,37 @@ func New(opts Options) (*App, error) {
 		a.forward(opts.Spotify.Ready(), &a.spotified)
 		opts.Spotify.Saved() // reads the playlists kept, for Home, without starting the helper
 	}
+	if opts.Radio != nil {
+		a.forward(opts.Radio.Ready(), &a.redraw)
+	}
+	if opts.Stations != nil {
+		a.forward(opts.Stations.Ready(), &a.redraw)
+	}
 	a.shell = newShell(a.home,
 		a.library,
 		spTab,
 		ytTab,
-		dlTab)
+		dlTab,
+		a.radioTab())
 	if a.expired != nil {
 		a.shell.alert = a.expired
 	}
-	addOverlays(a.shell, a.nowPlaying, a.queue, func() bool { return a.last.Queued }, opts.Player, opts.Lyrics)
+	addOverlays(a.shell, a.nowPlaying, a.queue, func() bool { return a.last.Queued }, opts.Player, opts.Lyrics, a.held)
 	if opts.Lyrics != nil {
 		a.forward(opts.Lyrics.Ready(), &a.redraw)
 	}
 	a.shell.menu = a.quickMenu()
+	a.applySwitches()
 	return a, nil
+}
+
+// radioTab is the Radio tab's root: the tab, with the station directory and
+// the stations saved, or without either a stand-in.
+func (a *App) radioTab() screens.Screen {
+	if a.opts.Radio == nil || a.opts.Stations == nil || a.opts.Player == nil {
+		return &screens.Placeholder{Tab: widgets.TabRadio, Title: "Radio"}
+	}
+	return radioscreen.NewTab(&radioscreen.Env{Nav: a, Dir: a.opts.Radio, Saved: a.opts.Stations, Player: a.opts.Player})
 }
 
 // quickMenu makes the quick menu, and the Settings screen it opens.
@@ -414,6 +466,7 @@ func (a *App) quickMenu() *quickmenu.Menu {
 	act := quickmenu.Actions{Sleep: a.opts.Player.Sleep, SetSleep: a.opts.Player.SetSleep,
 		ScreenOff: func() { a.setDark(true) }, OpenSettings: func() {}, Quit: func() { a.quit = true }}
 	act.Playing = func() bool { return a.last.Playing }
+	act.Live = func() bool { return a.last.Track.Live() }
 	if a.opts.Background != nil {
 		act.PlayInBackground = a.playInBackground
 	}
@@ -443,6 +496,7 @@ func (a *App) quickMenu() *quickmenu.Menu {
 			o.Spotify = a.opts.Spotify
 			o.Copies = a.env.Import != nil
 		}
+		o.Integrations, o.Switched = a.integrations(), a.switched
 		at := a.shell.add(overlay{button: input.None, screen: settingsscreen.New(o)})
 		act.OpenSettings = func() { a.shell.openOverlay(at, time.Now()) }
 	}
@@ -473,14 +527,17 @@ func (a *App) forward(ready <-chan struct{}, flag *atomic.Bool) {
 // addOverlays puts the screens that open over the tabs on s: Now Playing on
 // Start, when queued allows, the Queue on Select and, given lyrics, the Lyrics
 // screen, which opens from Now Playing and goes back to it, having no button
-// of its own.
-func addOverlays(s *shell, np *nowplaying.NowPlaying, q screens.Screen, queued func() bool, p lyricsscreen.Player, lyrics lyricsscreen.Source) {
+// of its own. held tells Now Playing and Lyrics which buttons are down.
+func addOverlays(s *shell, np *nowplaying.NowPlaying, q screens.Screen, queued func() bool, p lyricsscreen.Player, lyrics lyricsscreen.Source,
+	held func(input.Button) bool) {
 	nowPlayingAt := s.add(overlay{button: input.Start, screen: np, can: queued})
 	s.add(overlay{button: input.Select, screen: q})
+	np.SetHeld(held)
 	if lyrics == nil {
 		return
 	}
 	ly := lyricsscreen.New(p, lyrics, func() { s.openOverlay(nowPlayingAt, time.Now()) })
+	ly.SetHeld(held)
 	lyricsAt := s.add(overlay{button: input.None, screen: ly})
 	np.SetLyrics(func() { s.openOverlay(lyricsAt, time.Now()) })
 }
@@ -578,6 +635,7 @@ func (a *App) Run() error {
 // player changes that show on screen.
 func (a *App) poll() {
 	a.volumeNews(time.Now())
+	a.fontNews()
 	select {
 	case s := <-a.statuses:
 		if !a.status {
@@ -623,6 +681,7 @@ func (a *App) poll() {
 			a.dirty = true
 		}
 	}
+	a.followStations()
 	art := a.arts.Swap(false)
 	if a.redraw.Swap(false) || art {
 		a.dirty = true
@@ -655,14 +714,11 @@ func (a *App) poll() {
 	if st.Err != nil && l.Err == nil {
 		a.opts.Log.Warn("playback paused by an output error", "err", st.Err)
 	}
-	if st.Queued != l.Queued || st.Track != l.Track || st.Playing != l.Playing || st.Shuffle != l.Shuffle || st.Repeat != l.Repeat {
-		a.ui.Status.NowPlaying = ""
-		if st.Queued {
-			a.ui.Status.NowPlaying = st.Track.Title
-		}
+	if playingChanged(st, l) {
+		a.ui.Status.NowPlaying = statusTitle(st)
 		a.dirty = true
 	}
-	if p := tickFor(a.shell.overlay()); a.shell.open >= 0 && st.Elapsed/p != l.Elapsed/p {
+	if p := tickFor(a.shell.overlay()); a.shell.open >= 0 && ticked(st, l, p) {
 		a.dirty = true
 	}
 	// A sleep timer's time left, in the quick menu or Settings, moves on
@@ -727,12 +783,27 @@ func (a *App) showHome(progress []resume.Progress) {
 	if row, ok := home.ContinueRow(progress, a.ix, a.resumeAlbum, a.queueAlbum); ok {
 		rows = append(rows, row)
 	}
-	if a.opts.Spotify != nil {
+	if a.opts.Spotify != nil && a.spotifyOn() {
 		var imp func(spotify.Playlist)
-		if a.env.Import != nil {
+		if a.env.Import != nil && a.youtubeOn() {
 			imp = a.importPlaylist
 		}
 		if row, ok := home.SpotifyRow(a.playlists, a.openPlaylist, imp); ok {
+			rows = append(rows, row)
+		}
+	}
+	if a.radioOn() && a.opts.Stations != nil && a.opts.Player != nil {
+		saved := a.opts.Stations.List()
+		tracks := make([]player.Track, len(saved))
+		for i, st := range saved {
+			tracks[i] = st.Track()
+		}
+		// Stations play in order, as Home's albums do.
+		play := func(i int) {
+			a.opts.Player.SetShuffle(false)
+			a.play(tracks, i)
+		}
+		if row, ok := home.RadioRow(saved, play); ok {
 			rows = append(rows, row)
 		}
 	}
@@ -942,6 +1013,11 @@ func (a *App) pressed() {
 	}
 }
 
+// held reports whether b is down. Every event counts, those the screen off
+// or a hand-over keeps from the screens too: a screen whose trigger is let go
+// while another has the buttons drops its scrub.
+func (a *App) held(b input.Button) bool { return int(b) < len(a.down) && a.down[b] }
+
 func (a *App) dispatch(e input.Event) {
 	now := time.Now()
 	switch e.Kind {
@@ -950,8 +1026,8 @@ func (a *App) dispatch(e input.Event) {
 	case input.Release:
 		a.repeat.Release(e.Button)
 	}
-	if e.Button == input.Menu {
-		a.menuHeld = e.Kind != input.Release
+	if int(e.Button) < len(a.down) {
+		a.down[e.Button] = e.Kind != input.Release
 	}
 	if e.Button == input.Power {
 		if !a.opts.FirmwarePower {
@@ -962,7 +1038,7 @@ func (a *App) dispatch(e input.Event) {
 	if a.handing.Load() {
 		return // the music is being handed over
 	}
-	if a.opts.QuitChord && a.menuHeld && e.Button == input.Start && e.Kind == input.Press {
+	if a.opts.QuitChord && a.held(input.Menu) && e.Button == input.Start && e.Kind == input.Press {
 		a.quit = true
 		return
 	}
@@ -1117,6 +1193,31 @@ func (a *App) powerOff() {
 	a.quit = true
 }
 
+// playingChanged reports whether st, what the player gave after l, changes
+// what the screens show of what's playing: the track, the controls, or a
+// station's song and whether it is connecting or reconnecting.
+func playingChanged(st, l player.State) bool {
+	return st.Queued != l.Queued || st.Track != l.Track || st.Playing != l.Playing || st.Shuffle != l.Shuffle ||
+		st.Repeat != l.Repeat || st.LiveTitle != l.LiveTitle || st.Stalled != l.Stalled || st.Loading != l.Loading
+}
+
+// ticked reports whether the time played has moved on by a tick of p from l
+// to st, for Now Playing or the Queue to show. Neither shows a station's, so
+// a station never ticks: its song and its connecting state draw through
+// playingChanged, which poll still checks each tick.
+func ticked(st, l player.State, p time.Duration) bool {
+	return !st.Track.Live() && st.Elapsed/p != l.Elapsed/p
+}
+
+// statusTitle is what the status bar shows of what's playing: the track's
+// title, or the song a station sends, or with none the station's name.
+func statusTitle(st player.State) string {
+	if !st.Queued {
+		return ""
+	}
+	return cmp.Or(st.LiveTitle, st.Track.Title)
+}
+
 // wantsPrefetch reports whether the lyrics of the track st is on are to be
 // asked for, st being what the player gave after l: the track is new, or
 // something is queued again. A streamed song has no path, so tracks are told
@@ -1132,11 +1233,34 @@ func (a *App) VolumeChanged(level int) {
 	a.wake()
 }
 
+// fontNews has text drawn again with fonts that arrived since poll last
+// looked, as it drew as missing without them.
+func (a *App) fontNews() {
+	if a.fontsIn.Swap(false) {
+		a.ui.Fonts.Refresh()
+		a.dirty = true
+	}
+}
+
 // volumeNews shows a volume change the watcher reported, unless the screen is
 // off.
 func (a *App) volumeNews(now time.Time) {
 	if v := a.volume.Swap(0); v > 0 && !a.dark {
 		a.shell.showVolume(int(v-1), now)
+		a.dirty = true
+	}
+}
+
+// followStations builds Home again when a station has been saved or removed
+// since it was last built. Saving redraws through the forwarded Ready, so
+// this runs once per change, not every frame.
+func (a *App) followStations() {
+	if a.opts.Stations == nil {
+		return
+	}
+	if v := a.opts.Stations.Version(); v != a.stationsAt {
+		a.stationsAt = v
+		a.showHome(a.progress)
 		a.dirty = true
 	}
 }

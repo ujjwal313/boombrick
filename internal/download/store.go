@@ -119,9 +119,10 @@ func unindexed(db *sql.DB) ([]row, error) {
 }
 
 // musicBytes is the size of the library's files, for the Downloads tab's
-// storage card.
+// storage card. A file an update marked to be read again is -1 bytes until
+// the scan gets to it, and adds nothing.
 func musicBytes(db *sql.DB) (int64, error) {
 	var n int64
-	err := db.QueryRow(`SELECT COALESCE(SUM(size), 0) FROM tracks`).Scan(&n)
+	err := db.QueryRow(`SELECT COALESCE(SUM(size), 0) FROM tracks WHERE size > 0`).Scan(&n)
 	return n, err
 }

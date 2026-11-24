@@ -2,6 +2,13 @@
 // engine that moves frames from one to the other.
 package audio
 
+import "errors"
+
+// ErrRateChanged ends a live source whose stream changed its sample rate, as
+// one picked up again after a drop may come back at another: the player
+// opens it again.
+var ErrRateChanged = errors.New("audio: the stream came back at another sample rate")
+
 // Source yields interleaved stereo float32 frames in [-1, 1]. A Source is not
 // safe for concurrent use.
 type Source interface {

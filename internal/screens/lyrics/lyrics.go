@@ -5,6 +5,7 @@ package lyrics
 import (
 	"image"
 	"image/color"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -46,7 +47,6 @@ const (
 	barH      = 4
 	lineW     = theme.ScreenW - 2*side
 	glowBlur  = 30 // the current line's glow
-	seekStep  = 10 * time.Second
 )
 
 // outputDelay is how long after the player counts music played it is heard:
@@ -95,9 +95,11 @@ type Screen struct {
 	head   *lrc.Line     // the first line of the lyrics shown, to tell new lyrics from old
 	rows   map[int][]row // current lines wrapped, by index
 	plain  []string      // plain lyrics wrapped into rows
+	gen    uint64        // the font engine's generation rows and plain were wrapped in
 	scroll anim.Value    // plain lyrics' scroll, in rows
 	texts  *ui.TextCache // the lyric lines' text
 
+	scrub          *screens.Scrub    // L2 and R2, shown in the footer
 	elapsed, total screens.ClockText // the footer's
 }
 
@@ -109,14 +111,40 @@ const askEvery = 250 * time.Millisecond
 
 // New creates the screen; back returns to Now Playing.
 func New(p Player, src Source, back func()) *Screen {
-	return &Screen{p: p, src: src, back: back, line: -1, rows: map[int][]row{}, texts: ui.NewTextCache(lineCache)}
+	return &Screen{p: p, src: src, back: back, line: -1, rows: map[int][]row{}, texts: ui.NewTextCache(lineCache),
+		scrub: screens.NewScrub(p)}
 }
+
+// SetHeld tells the screen whether a button is down, so that a scrub whose
+// trigger was let go elsewhere is dropped.
+func (s *Screen) SetHeld(held func(input.Button) bool) { s.scrub.SetHeld(held) }
 
 // row is one wrapped row of the current line, with how far along it each
 // character starts so the fill needs no shaping while the song plays.
 type row struct {
-	text string
-	x    []float32 // x[i] is the width of the first i characters
+	text  string
+	x     []float32 // x[i] is the width of the first i characters
+	start int       // where the row starts in its line, in characters
+	of    int       // the line's length, in characters
+	rtl   bool      // drawn right to left
+}
+
+// lineRows makes the rows of line, wrapped into texts, each knowing where in
+// the line it starts.
+func lineRows(u *ui.Context, line string, texts []string) []row {
+	rows := make([]row, len(texts))
+	of, at := utf8.RuneCountInString(line), 0 // at: where the next row is looked for, in bytes
+	for i, t := range texts {
+		r := newRow(u, t)
+		r.rtl, r.of = text.RightToLeft(t), of
+		if j := strings.Index(line[at:], t); j >= 0 {
+			at += j
+		}
+		r.start = utf8.RuneCountInString(line[:at])
+		at = min(at+len(t), len(line))
+		rows[i] = r
+	}
+	return rows
 }
 
 // newRow measures s at every character boundary, once.
@@ -138,18 +166,11 @@ func (r row) width() float32 { return r.x[len(r.x)-1] }
 
 // fillWidth is how far along rows[k] the fill reaches when the share sung of
 // the whole line has been sung, stopping part of the way across a character.
-// The space a wrap drops between rows counts as a character, as it does in
-// the lyrics' own timing.
+// A space a wrap drops between rows counts as a character, as it does in the
+// lyrics' own timing; a line wrapped between characters drops none.
 func fillWidth(rows []row, k int, sung float64) float32 {
-	total := len(rows) - 1
-	for _, r := range rows {
-		total += r.runes()
-	}
-	left := sung * float64(total)
-	for _, r := range rows[:k] {
-		left -= float64(r.runes() + 1)
-	}
 	r := rows[k]
+	left := sung*float64(r.of) - float64(r.start)
 	switch {
 	case left <= 0:
 		return 0
@@ -158,6 +179,17 @@ func fillWidth(rows []row, k int, sung float64) float32 {
 	}
 	whole := int(left)
 	return r.x[whole] + float32(left-float64(whole))*(r.x[whole+1]-r.x[whole])
+}
+
+// fillSpan is the stretch of the screen, from x0 to x1, the fill covers on r
+// when it reaches fill along it: from the left for a row drawn left to right,
+// from its right end for one drawn right to left, where its first word is,
+// taking in whatever overhangs the row's end.
+func fillSpan(r row, fill float32) (x0, x1 float32) {
+	if r.rtl {
+		return side + r.width() - fill, theme.ScreenW
+	}
+	return 0, side + fill
 }
 
 // refresh picks up the playing track's lyrics, starting over for a new track.
@@ -198,9 +230,13 @@ func (s *Screen) refresh(st player.State, now time.Time) {
 	s.ly, s.state = ly, state
 }
 
-// Handle plays and pauses with A, seeks 10 s with ◀ ▶, scrolls plain lyrics
-// with ▲ ▼ and goes back with Y.
+// Handle plays and pauses with A, seeks 10 s with ◀ ▶, rewinds and
+// fast-forwards with L2 and R2, scrolls plain lyrics with ▲ ▼ and goes back
+// with Y.
 func (s *Screen) Handle(ev input.Event, now time.Time) bool {
+	if s.scrub.Handle(ev, now) {
+		return true
+	}
 	if ev.Kind == input.Release {
 		return false
 	}
@@ -220,9 +256,9 @@ func (s *Screen) Handle(ev input.Event, now time.Time) bool {
 		if !st.Queued {
 			return false
 		}
-		d := -seekStep
+		d := -screens.SeekStep
 		if ev.Button == input.Right {
-			d = seekStep
+			d = screens.SeekStep
 		}
 		s.p.Seek(max(st.Elapsed+d, 0))
 		return true
@@ -265,8 +301,11 @@ func (s *Screen) Tick() time.Duration {
 	return 250 * time.Millisecond
 }
 
-// Animating reports whether the lines are rising or scrolling.
-func (s *Screen) Animating(now time.Time) bool { return !s.slide.Done(now) || !s.scroll.Done(now) }
+// Animating reports whether the lines are rising or scrolling, or a trigger
+// is down for a scrub.
+func (s *Screen) Animating(now time.Time) bool {
+	return s.scrub.Active() || !s.slide.Done(now) || !s.scroll.Done(now)
+}
 
 // Draw renders the frame. One that makes no text while the lines are still
 // makes a piece of the next line's ahead of time.
@@ -274,6 +313,11 @@ func (s *Screen) Draw(u *ui.Context) {
 	made := u.Made()
 	st := s.p.State()
 	s.refresh(st, u.Now)
+	// Lines wrapped before fonts arrived are wrapped again with them.
+	if g := u.Fonts.Generation(); g != s.gen {
+		s.gen, s.plain = g, nil
+		clear(s.rows)
+	}
 	art := screens.TrackArt(st.Track)
 	drawBackdrop(u, art)
 	status := u.Status
@@ -281,7 +325,7 @@ func (s *Screen) Draw(u *ui.Context) {
 	widgets.StatusBar(u)
 	u.Status = status
 	top := s.drawHeader(u, st, art)
-	bottom := s.drawFooter(u, st)
+	bottom := s.drawFooter(u, s.scrub.Shown(st, u.Now)) // the lines keep to what is heard
 	area := gfx.Rect{X: 0, Y: top, W: theme.ScreenW, H: bottom - top}
 	switch {
 	case s.state == lrc.Found && s.ly.Synced:
@@ -467,10 +511,8 @@ func (s *Screen) wrapped(u *ui.Context, i int, w float32) []row {
 	if r, ok := s.rows[i]; ok {
 		return r
 	}
-	var rows []row
-	for _, text := range widgets.Wrap(u, s.ly.Lines[i].Text, curStyle, w) {
-		rows = append(rows, newRow(u, text))
-	}
+	line := s.ly.Lines[i].Text
+	rows := lineRows(u, line, widgets.Wrap(u, line, curStyle, w))
 	if len(rows) == 0 {
 		rows = []row{newRow(u, "")} // an instrumental break keeps its place
 	}
@@ -493,7 +535,8 @@ func (s *Screen) drawCurrent(u *ui.Context, rows []row, sung float64, top float3
 		case fill >= r.width():
 			u.TextIn(s.texts, r.text, curStyle, side, y, theme.Paper)
 		default:
-			u.PushClip(gfx.Rect{X: 0, Y: y - 10, W: side + fill, H: lh + 20})
+			x0, x1 := fillSpan(r, fill)
+			u.PushClip(gfx.Rect{X: x0, Y: y - 10, W: x1 - x0, H: lh + 20})
 			u.TextIn(s.texts, r.text, curStyle, side, y, theme.Paper)
 			u.PopClip()
 		}

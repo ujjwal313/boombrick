@@ -29,6 +29,9 @@ type Actions struct {
 	// shows.
 	Playing          func() bool
 	PlayInBackground func()
+	// Live reports whether a station plays, as the sleep timer then leaves out
+	// End of track and End of album. Without it none does.
+	Live func() bool
 }
 
 // The rows, top to bottom.
@@ -130,7 +133,7 @@ func (m *Menu) Handle(ev input.Event, now time.Time) bool {
 		if ev.Button == input.Left {
 			step = -1
 		}
-		m.act.SetSleep(screens.NextSleep(m.act.Sleep().Mode, step))
+		m.act.SetSleep(screens.NextSleep(m.act.Sleep().Mode, step, m.live()))
 		return true
 	}
 	if ev.Kind != input.Press {
@@ -164,7 +167,7 @@ func (m *Menu) move(step int, now time.Time) bool {
 func (m *Menu) do(now time.Time) {
 	switch m.focus {
 	case rowSleep:
-		m.act.SetSleep(screens.NextSleep(m.act.Sleep().Mode, 1))
+		m.act.SetSleep(screens.NextSleep(m.act.Sleep().Mode, 1, m.live()))
 	case rowScreen:
 		m.close(now)
 		m.act.ScreenOff()
@@ -240,3 +243,6 @@ func (m *Menu) refresh(now time.Time) {
 	m.rows[rowSleep].Value = screens.SleepValue(s, now)
 	m.rows[rowSleep].Active = s.Mode != player.SleepOff
 }
+
+// live reports whether a station plays.
+func (m *Menu) live() bool { return m.act.Live != nil && m.act.Live() }

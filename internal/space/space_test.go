@@ -51,14 +51,14 @@ func TestMeasuring(t *testing.T) {
 	bin := t.TempDir()
 	os.MkdirAll(filepath.Join(bin, "yt-dlp"), 0o755)
 	os.WriteFile(filepath.Join(bin, "yt-dlp", "program"), make([]byte, 700), 0o644)
-	m := New(Options{Art: &box{n: 300}, Lyrics: &box{n: 20}, Downloader: bin})
+	m := New(Options{Art: &box{n: 300}, Lyrics: &box{n: 20}, Fonts: &box{n: 4000}, Downloader: bin})
 	defer m.Close()
 	if _, ok := m.Sizes(); ok {
 		t.Fatal("sizes before they were measured")
 	}
 	m.Measure()
 	wait(t, m, "sizes", func() bool { _, ok := m.Sizes(); return ok })
-	if s, _ := m.Sizes(); s != (Sizes{Art: 300, Lyrics: 20, Downloader: 700}) {
+	if s, _ := m.Sizes(); s != (Sizes{Art: 300, Lyrics: 20, Fonts: 4000, Downloader: 700}) {
 		t.Fatalf("sizes %+v", s)
 	}
 }
@@ -79,20 +79,20 @@ func TestSizesAreNotShownWhileMeasuring(t *testing.T) {
 }
 
 func TestClearing(t *testing.T) {
-	art, lyrics, parts := &box{n: 300}, &box{n: 20}, &box{n: 1000}
-	m := New(Options{Art: art, Lyrics: lyrics, Parts: parts})
+	art, lyrics, parts, fonts := &box{n: 300}, &box{n: 20}, &box{n: 1000}, &box{n: 4000}
+	m := New(Options{Art: art, Lyrics: lyrics, Parts: parts, Fonts: fonts})
 	defer m.Close()
 	m.Clear()
 	wait(t, m, "the clear", func() bool { _, ok := m.Sizes(); return ok })
 	freed, ok := m.Cleared()
-	if !ok || freed != 1320 {
-		t.Fatalf("Cleared = %d, %v; want 1320", freed, ok)
+	if !ok || freed != 5320 {
+		t.Fatalf("Cleared = %d, %v; want 5320", freed, ok)
 	}
 	if _, ok := m.Cleared(); ok {
 		t.Fatal("Cleared reported the same clear twice")
 	}
-	if s, _ := m.Sizes(); s != (Sizes{}) || art.clears != 1 || lyrics.clears != 1 || parts.clears != 1 {
-		t.Fatalf("after the clear: sizes %+v, clears %d %d %d", s, art.clears, lyrics.clears, parts.clears)
+	if s, _ := m.Sizes(); s != (Sizes{}) || art.clears != 1 || lyrics.clears != 1 || parts.clears != 1 || fonts.clears != 1 {
+		t.Fatalf("after the clear: sizes %+v, clears %d %d %d %d", s, art.clears, lyrics.clears, parts.clears, fonts.clears)
 	}
 }
 

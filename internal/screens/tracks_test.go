@@ -66,6 +66,10 @@ func TestLyricsTrack(t *testing.T) {
 	if got != (lyrics.Track{SpotifyID: "abc", Title: "Rust", Artist: "Odalys"}) || got.Key() != "spotify:abc" {
 		t.Fatalf("streamed: %+v key %q", got, got.Key())
 	}
+	got = LyricsTrack(player.Track{Title: "Radio X", Stream: "http://example.test/live", StationID: "abc"})
+	if got.Key() != "" {
+		t.Fatalf("a station asks for lyrics: key %q", got.Key())
+	}
 }
 
 func TestPlayingLyricsTrack(t *testing.T) {

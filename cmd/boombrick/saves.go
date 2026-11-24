@@ -53,9 +53,13 @@ func (s *saves) handOver(f func() error) error {
 
 // handOverWait is how long a hand-over waits for the background player to
 // play what st is on. A Spotify song waits longer: the player signs in to
-// Spotify itself first, which on a weak Wi-Fi signal takes seconds.
+// Spotify itself first, which on a weak Wi-Fi signal takes seconds. A station
+// waits longer still: it connects first, and opening it alone may take 15 s.
 func handOverWait(st player.State) time.Duration {
-	if st.Track.Streamed() {
+	switch {
+	case st.Track.Live():
+		return 20 * time.Second
+	case st.Track.Streamed():
 		return 15 * time.Second
 	}
 	return 5 * time.Second

@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,12 +15,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/background"
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/radio"
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/spotify"
@@ -36,6 +40,7 @@ type rig struct {
 	song, bin  string
 	data, lock string
 	stay       string // CrossMix's keep-awake file
+	online     bool   // whether the test process's player finds a network; radio needs it
 	env        []string
 }
 
@@ -216,6 +221,92 @@ func TestBackgroundPlayer(t *testing.T) {
 		closeP2()
 	})
 
+	// A radio station goes the whole way: played, handed over, and taken back.
+	// The background player opens it itself, from the stream's address in the
+	// saved queue.
+	t.Run("radio station", func(t *testing.T) {
+		srv := testStation(t)
+		url := srv.url
+		r := newRig(t, false)
+		r.online = true
+		st, prefs := r.open()
+		p, closeP := r.player(st, prefs)
+		p.Play([]player.Track{radio.Station{ID: "e2e", Name: "Test FM", URL: url}.Track()}, 0)
+		asked := func(n int32) func() bool { return func() bool { return srv.asked.Load() >= n } }
+		playing := func(p *player.Player) func() bool {
+			return func() bool { s := p.State(); return s.Playing && !s.Loading && !s.Stalled }
+		}
+		holds := func(p *player.Player, when string) {
+			t.Helper()
+			if s := p.State(); s.Count != 1 || s.Track.StationID != "e2e" || !s.Track.Live() {
+				t.Fatalf("%s, the queue holds %d tracks, the first %+v; want the station", when, s.Count, s.Track)
+			}
+		}
+		waitFor(t, "the station to play", playing(p))
+		holds(p, "playing")
+
+		saver := resume.NewSaver(st.DB)
+		err := background.HandOver(p, saver.Save, func(h resume.Handover) error { return resume.SaveHandover(st.DB, h) },
+			r.bin, r.env, 10*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.State().Playing {
+			t.Fatal("after the hand-over, the first player still plays")
+		}
+		if _, held, _ := background.Holder(r.lock); !held {
+			t.Fatal("after the hand-over, nobody holds the lock")
+		}
+		if snap, _ := r.saved(); len(snap.Queue) != 1 || snap.Queue[0].StationID != "e2e" || snap.Queue[0].Stream != url {
+			t.Fatalf("the saved queue = %+v; want the station", snap.Queue)
+		}
+		// The background player's own connection, and then it stays up while the
+		// station plays.
+		waitFor(t, "the background player to connect to the station", asked(2))
+		r.stays(time.Second)
+		closeP()
+
+		p2, closeP2 := r.player(st, prefs)
+		background.TakeBack(r.lock, 5*time.Second, p2, r.store(st), r.log())
+		if _, held, _ := background.Holder(r.lock); held {
+			t.Fatal("after the take-back, the lock is still held")
+		}
+		holds(p2, "taken back")
+		waitFor(t, "the station to play again", playing(p2))
+		holds(p2, "playing again")
+		if n := srv.asked.Load(); n < 3 {
+			t.Fatalf("the station was asked %d times; want 3 or more: the app, the background player, the app again", n)
+		}
+		closeP2()
+	})
+
+	// What the background player saves when it is stopped shows that it played
+	// the station: the music is saved as playing, with the station queued.
+	t.Run("radio station in the background", func(t *testing.T) {
+		srv := testStation(t)
+		r := newRig(t, false)
+		r.online = true
+		track := radio.Station{ID: "e2e", Name: "Test FM", URL: srv.url}.Track()
+		st, _ := r.open()
+		if err := resume.NewSaver(st.DB).Save(player.Snapshot{Queue: []player.Track{track}, Order: []int{0}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := resume.SaveHandover(st.DB, resume.Handover{Playing: true}); err != nil {
+			t.Fatal(err)
+		}
+		r.start()
+		r.clearHandover()
+		waitFor(t, "the background player to connect to the station", func() bool { return srv.asked.Load() >= 1 })
+		r.stays(time.Second)
+		if took, err := background.Stop(r.lock, 5*time.Second); !took || err != nil {
+			t.Fatalf("Stop = %v, %v", took, err)
+		}
+		snap, h := r.saved()
+		if !h.Playing || len(snap.Queue) != 1 || snap.Queue[0].StationID != "e2e" {
+			t.Fatalf("saved playing %v with queue %+v; want playing, with the station", h.Playing, snap.Queue)
+		}
+	})
+
 	// Under CrossMix the player keeps the device awake while it plays, and lets
 	// it sleep again once it stops by itself, but not when Boombrick takes the
 	// music back, for Boombrick plays on.
@@ -343,11 +434,59 @@ func (w testLog) Write(b []byte) (int, error) {
 // files never reach the Spotify helper.
 func (r *rig) player(st *store.Store, prefs *settings.Settings) (*player.Player, func()) {
 	sp := spotify.NewHelper(filepath.Join(r.data, "no-such-helper"), filepath.Join(r.data, "spotify"), r.log(), io.Discard)
-	p := newPlayer(st.DB, prefs, sp, func() bool { return false }, r.log(), func(player.Notice) {})
+	p := newPlayer(st.DB, prefs, sp, nil, func() bool { return r.online }, r.log(), func(player.Notice) {})
 	var once sync.Once
 	closeP := func() { once.Do(func() { p.Close(); sp.Close() }) }
 	r.t.Cleanup(closeP)
 	return p, closeP
+}
+
+// station is a radio station for the tests, and counts the requests made to it.
+type station struct {
+	url   string
+	asked atomic.Int32
+}
+
+// testStation serves the stream fixture over and over as an MP3 station, with
+// a title in the stream.
+func testStation(t *testing.T) *station {
+	t.Helper()
+	path := filepath.Join("..", "..", "internal", "audio", "decode", "testdata", "stream-44100.mp3")
+	file, err := os.ReadFile(path)
+	if err != nil {
+		t.Skipf("%s is missing; run make fixtures", path)
+	}
+	const metaint = 8192
+	text := []byte("StreamTitle='Fixture - Noise';")
+	block := make([]byte, 1+(len(text)+15)/16*16)
+	block[0] = byte(len(block) / 16)
+	copy(block[1:], text)
+	s := &station{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.asked.Add(1)
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.Header().Set("icy-metaint", strconv.Itoa(metaint))
+		w.WriteHeader(http.StatusOK)
+		for at, left := 0, metaint; r.Context().Err() == nil; {
+			k := min(len(file)-at, left, 4096)
+			if _, err := w.Write(file[at : at+k]); err != nil {
+				return
+			}
+			at, left = (at+k)%len(file), left-k
+			if left == 0 {
+				if _, err := w.Write(block); err != nil {
+					return
+				}
+				left = metaint
+			}
+		}
+	}))
+	t.Cleanup(func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	})
+	s.url = srv.URL
+	return s
 }
 
 func (r *rig) store(st *store.Store) background.Store {
@@ -427,4 +566,15 @@ func memory(t *testing.T, pid int) string {
 		parts = append(parts, string(m[1])+" "+string(m[2])+" kB")
 	}
 	return strings.Join(parts, ", ")
+}
+
+// stays checks that the background player holds the lock for d: that it plays
+// on, after it has connected to a station, and hasn't given up and gone.
+func (r *rig) stays(d time.Duration) {
+	r.t.Helper()
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		if _, held, _ := background.Holder(r.lock); !held {
+			r.t.Fatal("the background player stopped after connecting to the station")
+		}
+	}
 }

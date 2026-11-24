@@ -120,10 +120,10 @@ func (s *SignIn) Draw(u *ui.Context) {
 	hints := codeHints
 	switch {
 	case err != nil && s.code == nil:
-		message(u, &s.msg, failText(err), right)
+		screens.Message(u, &s.msg, failText(err), right)
 		hints = signInRetries
 	case s.code == nil:
-		message(u, &s.msg, "Getting a code…", right)
+		screens.Message(u, &s.msg, "Getting a code…", right)
 		hints = cancelHints
 	default:
 		s.drawCode(u, right, expired)

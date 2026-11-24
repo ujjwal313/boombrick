@@ -51,6 +51,9 @@ func afterFunc(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) 
 func (p *Player) SetSleep(m SleepMode) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if (m == SleepTrack || m == SleepAlbum) && p.liveLocked() {
+		return // a station never ends, so neither would wait
+	}
 	atEnd := p.sleep.Mode == SleepTrack || p.sleep.Mode == SleepAlbum
 	p.stopSleepLocked()
 	p.sleep = Sleep{Mode: m}
@@ -137,6 +140,9 @@ func (p *Player) sleepFire(gen uint64) {
 	}
 	p.engine.FadeOut(sleepFade)
 	p.fadeEnds = p.now().Add(sleepFade)
+	if p.liveLocked() {
+		p.closeAfterFadeLocked() // paused, a station would hold its stream open
+	}
 }
 
 // fadingLocked reports whether a timed sleep's fade is under way.
@@ -199,7 +205,7 @@ func (p *Player) sleepEndLocked() {
 	}
 	p.pos, p.cued, p.startFrame = pos, true, 0
 	if p.queue[p.order[p.pos]].Pending() {
-		p.waiting = true // cued when it lands
+		p.waitCuedLocked()
 		return
 	}
 	p.cueLocked()

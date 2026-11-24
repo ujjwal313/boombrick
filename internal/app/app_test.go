@@ -36,7 +36,7 @@ func TestLyricsOpensFromNowPlayingAndGoesBack(t *testing.T) {
 	s := newShell(&page{name: "home"})
 	p := &stillPlayer{}
 	np := nowplaying.New(p)
-	addOverlays(s, np, &page{name: "queue"}, nil, p, noLyrics{})
+	addOverlays(s, np, &page{name: "queue"}, nil, p, noLyrics{}, nil)
 	s.handle(press(input.Start), t0)
 	for _, back := range []input.Button{input.B, input.Y} {
 		if s.overlay() != np {
@@ -53,10 +53,45 @@ func TestLyricsOpensFromNowPlayingAndGoesBack(t *testing.T) {
 	}
 	s2 := newShell(&page{name: "home"})
 	np2 := nowplaying.New(p)
-	addOverlays(s2, np2, &page{name: "queue"}, nil, p, nil)
+	addOverlays(s2, np2, &page{name: "queue"}, nil, p, nil, nil)
 	s2.handle(press(input.Start), t0)
 	if s2.handle(press(input.Y), t0) || len(s2.overlays) != 2 {
 		t.Fatal("without lyrics there is no Lyrics screen")
+	}
+}
+
+// R2 held on Now Playing and let go on Lyrics, which Y opened meanwhile,
+// leaves Now Playing no scrub: the screens know which buttons are down.
+func TestScrubEndsWhenItsReleaseGoesElsewhere(t *testing.T) {
+	s := newShell(&page{name: "home"})
+	p := &stillPlayer{st: player.State{Queued: true, Playing: true, Elapsed: time.Minute, Duration: time.Hour,
+		Track: player.Track{Path: "/m/a.flac", Duration: time.Hour}}}
+	a := &App{shell: s, repeat: input.NewRepeater()}
+	np := nowplaying.New(p)
+	addOverlays(s, np, &page{name: "queue"}, nil, p, noLyrics{}, a.held)
+	a.dispatch(press(input.Start))
+	a.dispatch(press(input.R2))
+	if !np.Animating(time.Now()) {
+		t.Fatal("R2 down on Now Playing asks for no frames")
+	}
+	a.dispatch(press(input.Y))
+	a.dispatch(release(input.R2))
+	if np.Animating(time.Now()) {
+		t.Fatal("Now Playing still scrubs after R2 was let go on Lyrics")
+	}
+}
+
+// Buttons are known to be down or up with the screen off too, where their
+// events go no further.
+func TestHeldFollowsButtonsWithTheScreenOff(t *testing.T) {
+	a := &App{shell: newShell(&page{name: "home"}), repeat: input.NewRepeater(), dark: true}
+	a.dispatch(press(input.R2))
+	if !a.held(input.R2) {
+		t.Fatal("R2 pressed isn't down")
+	}
+	a.dispatch(release(input.R2))
+	if a.held(input.R2) {
+		t.Fatal("R2 let go is still down")
 	}
 }
 
@@ -78,6 +113,28 @@ func TestTicksCountFromTheFrameStart(t *testing.T) {
 	a.last.Playing = false
 	if got := a.timeout(start, start.Add(40*time.Millisecond)); got < time.Second {
 		t.Fatalf("paused: sleep %v, want until the clock's next minute", got)
+	}
+}
+
+// While a station plays on Now Playing the loop wakes every second, so its
+// song and its connecting state show within a second: the player doesn't wake
+// the loop when they change. A song wakes it 4 times a second for the
+// progress bar.
+func TestAStationOnNowPlayingWakesEverySecond(t *testing.T) {
+	s := newShell(&page{name: "home"})
+	p := &stillPlayer{st: player.State{Queued: true, Playing: true,
+		Track: player.Track{Title: "Radio City", Stream: "http://stream.radio.test/city"}}}
+	addOverlays(s, nowplaying.New(p), &page{name: "queue"}, nil, p, nil, nil)
+	s.handle(press(input.Start), t0)
+	a := &App{shell: s, repeat: input.NewRepeater(), fade: newAccentFade(theme.Fallback()), ui: &ui.Context{}}
+	a.last = p.st
+	start := t0.Add(anim.Push) // Now Playing is in place
+	if got := a.timeout(start, start.Add(40*time.Millisecond)); got != 960*time.Millisecond {
+		t.Fatalf("a station: sleep %v, want 960ms, the rest of the second", got)
+	}
+	p.st.Track = player.Track{Path: "/m/a.flac", Title: "Rust"}
+	if got := a.timeout(start, start.Add(40*time.Millisecond)); got != 210*time.Millisecond {
+		t.Fatalf("a song: sleep %v, want 210ms", got)
 	}
 }
 

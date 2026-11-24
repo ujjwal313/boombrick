@@ -30,6 +30,7 @@ type Prefs interface {
 // Player is what Settings changes in the player. *player.Player is one.
 type Player interface {
 	Sleep() player.Sleep
+	State() player.State
 	SetSleep(m player.SleepMode)
 	SetLevelling(on bool)
 }
@@ -67,11 +68,18 @@ type Options struct {
 	Quit         func()     // the Update ready dialog's Quit now
 	Spotify      Account    // nil: no Streaming quality, nor the Accounts card
 	Copies       bool       // importing exists: Prefer downloaded copies is shown
+	// Integrations are the switches the Integrations page lists, in order;
+	// with none there is no Integrations row. Switched hears of each switch
+	// as it is flipped, after Prefs has it. An integration switched off takes
+	// its rows and cards with it.
+	Integrations []Integration
+	Switched     func(key string, on bool)
 }
 
 // What focus moves between, top to bottom: the rows, then the cards' pills.
 const (
-	rowStream = iota
+	rowIntegrations = iota
+	rowStream
 	rowQuality
 	rowPrefer
 	rowStorage
@@ -122,29 +130,33 @@ var streams = []choice{
 
 // Screen is Settings.
 type Screen struct {
-	opts    Options
-	storage *storagePage // non-nil while the Storage page is shown
-	dialog  *confirm     // Update ready, while it is open
-	focus   int
-	k       [itemCount]anim.Value
-	open    int // the row expanded into its options, or -1
-	scroll  anim.Value
-	rows    [rowCount]widgets.Setting
-	stream  int // Streaming quality's choice, as last read
-	quality int // and Download quality's
-	sleeps  []choice
-	sleep   player.Sleep // the timer as its row last showed it
-	sleptAt time.Time    // and when
-	card    [3]int64     // the SD card's numbers the storage row was written for
-	footer  string
-	tool    card
-	toolFor toolState // what the Downloader card was written for
-	app     card
-	appFor  appState // and the Boombrick card
-	staging bool     // an update was being staged when the card was written
-	account card
-	acctFor spotify.Status // what the Spotify card was written for
-	hints   map[hintKey][]widgets.Hint
+	opts         Options
+	storage      *storagePage      // non-nil while the Storage page is shown
+	integrations *integrationsPage // and the Integrations page
+	dialog       *confirm          // Update ready, while it is open
+	focus        int
+	k            [itemCount]anim.Value
+	open         int // the row expanded into its options, or -1
+	scroll       anim.Value
+	rows         [rowCount]widgets.Setting
+	stream       int // Streaming quality's choice, as last read
+	quality      int // and Download quality's
+	sleeps       []choice
+	sleep        player.Sleep // the timer as its row last showed it
+	sleptAt      time.Time    // and when
+	card         [3]int64     // the SD card's numbers the storage row was written for
+	footer       string
+	tool         card
+	toolFor      toolState // what the Downloader card was written for
+	app          card
+	appFor       appState // and the Boombrick card
+	staging      bool     // an update was being staged when the card was written
+	account      card
+	acctFor      spotify.Status // what the Spotify card was written for
+	hints        map[hintKey][]widgets.Hint
+	// The integrations' switches as last read: only this screen flips them, so
+	// they are read when it opens and when it flips one, not every frame.
+	switches map[string]bool
 }
 
 type hintKey struct {
@@ -154,14 +166,15 @@ type hintKey struct {
 
 // New returns the screen.
 func New(opts Options) *Screen {
-	s := &Screen{opts: opts, open: -1, hints: map[hintKey][]widgets.Hint{}}
+	s := &Screen{opts: opts, open: -1, hints: map[hintKey][]widgets.Hint{}, switches: map[string]bool{}}
 	s.rows = [rowCount]widgets.Setting{
-		rowStream:    {Icon: "stream", Label: "Streaming quality"},
-		rowQuality:   {Icon: "download", Label: "Download quality"},
-		rowPrefer:    {Icon: "circlecheck", Label: "Prefer downloaded copies"},
-		rowStorage:   {Icon: "sd", Label: "Storage", Chevron: true},
-		rowSleep:     {Icon: "moon", Label: "Sleep timer"},
-		rowLevelling: {Icon: "sliders", Label: "Volume levelling"},
+		rowIntegrations: {Icon: "blocks", Label: "Integrations", Chevron: true},
+		rowStream:       {Icon: "stream", Label: "Streaming quality"},
+		rowQuality:      {Icon: "download", Label: "Download quality"},
+		rowPrefer:       {Icon: "circlecheck", Label: "Prefer downloaded copies"},
+		rowStorage:      {Icon: "sd", Label: "Storage", Chevron: true},
+		rowSleep:        {Icon: "moon", Label: "Sleep timer"},
+		rowLevelling:    {Icon: "sliders", Label: "Volume levelling"},
 	}
 	for _, m := range player.SleepModes {
 		s.sleeps = append(s.sleeps, choice{label: screens.SleepLabel(m)})
@@ -171,20 +184,21 @@ func New(opts Options) *Screen {
 }
 
 // Opened starts the screen afresh each time it opens, and asks whether the
-// downloader and Boombrick have newer releases.
+// downloader, with YouTube on, and Boombrick have newer releases.
 func (s *Screen) Opened() {
 	s.reset()
-	for _, r := range []Releases{s.opts.ToolReleases, s.opts.Releases} {
-		if r != nil {
-			r.Check()
-		}
+	if s.opts.ToolReleases != nil && s.on(keys.YouTubeOn) {
+		s.opts.ToolReleases.Check()
+	}
+	if s.opts.Releases != nil {
+		s.opts.Releases.Check()
 	}
 }
 
 // reset puts the screen on the main page, focus on the first row shown,
 // nothing expanded.
 func (s *Screen) reset() {
-	s.storage, s.open, s.focus = nil, -1, 0
+	s.storage, s.integrations, s.open, s.focus = nil, nil, -1, 0
 	for !s.shown(s.focus) {
 		s.focus++
 	}
@@ -205,24 +219,36 @@ func (s *Screen) readPrefs() {
 	s.rows[rowQuality].Value = qualities[s.quality].label
 	s.rows[rowLevelling].Value = onOff(s.opts.Prefs.Bool(keys.VolumeLevelling))
 	s.rows[rowPrefer].Value = onOff(s.opts.Prefs.Bool(keys.PreferDownloaded))
+	for _, k := range []string{keys.SpotifyOn, keys.YouTubeOn} {
+		s.switches[k] = s.opts.Prefs.Bool(k)
+	}
+	for _, in := range s.opts.Integrations {
+		s.switches[in.Key] = s.opts.Prefs.Bool(in.Key)
+	}
+	s.rows[rowIntegrations].Value = s.switchedOn()
 }
 
-// shown reports whether an item is shown: Storage only with something to
-// measure, and a card's pill only when the card offers one.
+// shown reports whether an item is shown: Integrations with integrations to
+// switch, Storage only with something to measure, a card's pill only when the
+// card offers one, and nothing of an integration switched off.
 func (s *Screen) shown(item int) bool {
 	switch item {
+	case rowIntegrations:
+		return len(s.opts.Integrations) > 0
 	case rowStream:
-		return s.opts.Spotify != nil
+		return s.opts.Spotify != nil && s.on(keys.SpotifyOn)
 	case rowPrefer:
-		return s.opts.Copies
+		return s.opts.Copies && s.on(keys.SpotifyOn)
+	case rowQuality:
+		return s.on(keys.YouTubeOn)
 	case rowStorage:
 		return s.opts.Space != nil
 	case pillTool:
-		return s.opts.Downloader != nil
+		return s.opts.Downloader != nil && s.on(keys.YouTubeOn)
 	case pillApp:
 		return s.app.pill != ""
 	case pillAccount:
-		return s.account.pill != ""
+		return s.account.pill != "" && s.on(keys.SpotifyOn)
 	}
 	return true
 }
@@ -234,6 +260,9 @@ func (s *Screen) ShowsDownloads() bool { return s.opts.Downloader != nil }
 // Handle moves between the rows and pills, changes them with A and the
 // D-pad, and passes to the Storage page or the dialog while one is shown.
 func (s *Screen) Handle(ev input.Event, now time.Time) bool {
+	if s.integrations != nil {
+		return s.integrations.handle(s, ev, now)
+	}
 	if s.storage != nil {
 		return s.storage.handle(s, ev, now)
 	}
@@ -293,6 +322,8 @@ func (s *Screen) act(now time.Time) bool {
 		} else {
 			s.open = s.focus
 		}
+	case rowIntegrations:
+		s.integrations = newIntegrationsPage(s)
 	case rowStorage:
 		s.storage = newStoragePage(s.opts.Space, now)
 	case rowLevelling:
@@ -339,7 +370,12 @@ func (s *Screen) choose(step int) bool {
 		s.opts.Prefs.Set(keys.DownloadQuality, qualities[i].value)
 		s.readPrefs()
 	case rowSleep:
+		// A step passes over the modes a station can't reach.
+		live := s.live()
 		i := s.sleepIndex() + step
+		for i >= 0 && i < len(player.SleepModes) && !screens.SleepOffered(player.SleepModes[i], live) {
+			i += step
+		}
 		if i < 0 || i >= len(player.SleepModes) {
 			return false
 		}
@@ -378,9 +414,12 @@ func (s *Screen) sleepIndex() int {
 }
 
 // Back folds an expanded setting, closes a dialog (Later, for Update ready),
-// or leaves the Storage page, before B closes Settings.
+// or leaves the Storage or Integrations page, before B closes Settings.
 func (s *Screen) Back() bool {
 	switch {
+	case s.integrations != nil:
+		s.integrations = nil
+		return true
 	case s.storage != nil:
 		return s.storage.back(s, time.Now())
 	case s.dialog != nil:
@@ -403,6 +442,9 @@ func (s *Screen) Claims(b input.Button) bool {
 // Animating reports whether focus, the scroll, a dialog or the Storage page
 // is moving.
 func (s *Screen) Animating(now time.Time) bool {
+	if s.integrations != nil {
+		return s.integrations.animating(now)
+	}
 	if s.storage != nil {
 		return s.storage.animating(now)
 	}
@@ -420,7 +462,7 @@ func (s *Screen) Animating(now time.Time) bool {
 // Due is when the sleep timer's time left next changes after t, while its row
 // is shown.
 func (s *Screen) Due(t time.Time) (time.Time, bool) {
-	if s.storage != nil {
+	if s.storage != nil || s.integrations != nil {
 		return time.Time{}, false
 	}
 	return screens.SleepDue(s.opts.Player.Sleep(), t)
@@ -432,6 +474,10 @@ func (s *Screen) Draw(u *ui.Context) {
 	u.Accent = theme.Fallback()
 	defer func() { u.Accent = acc }()
 	widgets.DrawBackground(u, widgets.FlatGround)
+	if s.integrations != nil {
+		s.integrations.draw(s, u)
+		return
+	}
 	if s.storage != nil {
 		s.storage.draw(s, u)
 		return
@@ -469,7 +515,7 @@ func (s *Screen) Draw(u *ui.Context) {
 		card *card
 		pill int
 	}{{&s.tool, pillTool}, {&s.app, pillApp}} {
-		if c.card.title == "" {
+		if c.card.title == "" || c.pill == pillTool && !s.on(keys.YouTubeOn) {
 			continue
 		}
 		y += 16
@@ -481,7 +527,7 @@ func (s *Screen) Draw(u *ui.Context) {
 		y += box.H
 	}
 	// The Spotify account, under a heading of its own.
-	if s.account.title != "" {
+	if s.account.title != "" && s.on(keys.SpotifyOn) {
 		y += 28
 		u.Text("Accounts", text.Heading, side, at+y, theme.Paper)
 		y += u.LineHeight(text.Heading) + 4
@@ -663,6 +709,7 @@ func (s *Screen) drawPanel(u *ui.Context, row int, box gfx.Rect) {
 	u.Text(about, aboutText, x, y, theme.Ink3)
 	y += u.LineHeight(aboutText) + 14
 	cellH := optionHeight(u, choices)
+	live := row == rowSleep && s.live()
 	for i, c := range choices {
 		// Each line shares the width out among its own options, so a short
 		// last line gives long labels room.
@@ -673,6 +720,9 @@ func (s *Screen) drawPanel(u *ui.Context, row int, box gfx.Rect) {
 		ring, ink := theme.PaperA(0.45), theme.Ink2
 		if i == chosen {
 			ring, ink = theme.Gold, theme.Paper
+		}
+		if live && !screens.SleepOffered(player.SleepModes[i], true) {
+			ring, ink = theme.Ink4, theme.Ink4
 		}
 		widgets.Radio(u, cx, ry, radio, ring, i == chosen)
 		u.Text(c.label, optionText, cx+radio+12, cy, ink)
@@ -692,7 +742,7 @@ func (s *Screen) hint() []widgets.Hint {
 	switch {
 	case k.open:
 		h = []widgets.Hint{{Key: "◀ ▶", Label: "Choose"}, {Key: "A", Label: "Done"}}
-	case k.item == rowStorage:
+	case k.item == rowStorage, k.item == rowIntegrations:
 		h = []widgets.Hint{{Key: "A", Label: "Open"}, {Key: "B", Label: "Back"}}
 	case k.item == rowLevelling, k.item == rowPrefer:
 		h = []widgets.Hint{{Key: "A", Label: "Switch"}, {Key: "B", Label: "Back"}}
@@ -706,3 +756,7 @@ func (s *Screen) hint() []widgets.Hint {
 	s.hints[k] = h
 	return h
 }
+
+// live reports whether a station plays, which has no end of a track or album
+// for the sleep timer to wait for.
+func (s *Screen) live() bool { return s.opts.Player.State().Track.Live() }

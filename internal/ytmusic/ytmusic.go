@@ -3,6 +3,7 @@
 package ytmusic
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -178,23 +179,33 @@ func (c *Client) Artist(ctx context.Context, id string) (ArtistPage, error) {
 	return a, err
 }
 
+// consent answers YouTube's question about cookies, asked in Europe, the UK
+// and Switzerland, as yt-dlp and ytmusicapi answer it.
+var consent = &http.Cookie{Name: "SOCS", Value: "CAI"}
+
 // post sends the web app's request to path, with fields beside the context
 // that names the client. English is asked for because the parser reads some
 // labels, such as "Single" and the shelves' titles.
 func (c *Client) post(ctx context.Context, path string, fields map[string]string) ([]byte, error) {
-	req := map[string]any{"context": map[string]any{"client": map[string]string{
+	msg := map[string]any{"context": map[string]any{"client": map[string]string{
 		"clientName":    "WEB_REMIX",
 		"clientVersion": c.version(),
 		"hl":            "en",
 	}}}
 	for k, v := range fields {
-		req[k] = v
+		msg[k] = v
 	}
-	b, err := json.Marshal(req)
+	b, err := json.Marshal(msg)
 	if err != nil {
 		return nil, err
 	}
-	body, err := netx.Post(ctx, c.http, c.base+path+"?prettyPrint=false", "application/json", b, maxResponse)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path+"?prettyPrint=false", bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(consent)
+	body, err := netx.Do(c.http, req, maxResponse)
 	if err == nil && c.raw != nil {
 		c.raw(path, body)
 	}

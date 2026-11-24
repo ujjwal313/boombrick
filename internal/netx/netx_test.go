@@ -6,12 +6,14 @@ import (
 	"crypto/x509"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -118,6 +120,28 @@ func TestTLSChecksTheRoots(t *testing.T) {
 	}
 }
 
+// A client whose connections are wrapped reads the CA certificates on its
+// first request, as NewClient's does, not when it is made: a run that never
+// plays a station shouldn't pay for them.
+func TestNewClientWithReadsTheRootsOnItsFirstRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("hello")) }))
+	defer srv.Close()
+	var read, wrapped atomic.Int32
+	defer func(r func() *x509.CertPool) { roots = r }(roots)
+	roots = func() *x509.CertPool { read.Add(1); return x509.NewCertPool() }
+	c := NewClientWith(func(c net.Conn) net.Conn { wrapped.Add(1); return c })
+	if read.Load() != 0 {
+		t.Fatal("the certificates were read before any request")
+	}
+	if body, err := Get(context.Background(), c, srv.URL, 100); err != nil || string(body) != "hello" {
+		t.Fatalf("Get = %q, %v", body, err)
+	}
+	if read.Load() != 1 || wrapped.Load() != 1 {
+		t.Fatalf("after a request: certificates read %d times, %d connections wrapped; want 1 and 1",
+			read.Load(), wrapped.Load())
+	}
+}
+
 func TestRootsFrom(t *testing.T) {
 	sys := bundled()
 	if sys.Equal(x509.NewCertPool()) {
@@ -159,7 +183,8 @@ func TestRootsWithoutTheSystems(t *testing.T) {
 	}
 }
 
-func TestPost(t *testing.T) {
+// Do sends the request as the caller made it, with Boombrick's user agent.
+func TestDo(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" ||
@@ -170,17 +195,24 @@ func TestPost(t *testing.T) {
 		w.Write(append([]byte("got "), b...))
 	}))
 	defer srv.Close()
-	ctx := context.Background()
+	post := func(contentType string, body []byte, limit int64) ([]byte, error) {
+		req, err := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", contentType)
+		return Do(srv.Client(), req, limit)
+	}
 
-	body, err := Post(ctx, srv.Client(), srv.URL, "application/json", []byte(`{"a":1}`), 1<<10)
+	body, err := post("application/json", []byte(`{"a":1}`), 1<<10)
 	if err != nil || string(body) != `got {"a":1}` {
-		t.Fatalf("Post = %q, %v", body, err)
+		t.Fatalf("Do = %q, %v", body, err)
 	}
 	var se *StatusError
-	if _, err := Post(ctx, srv.Client(), srv.URL, "text/plain", nil, 1<<10); !errors.As(err, &se) || se.Code != 400 {
+	if _, err := post("text/plain", nil, 1<<10); !errors.As(err, &se) || se.Code != 400 {
 		t.Fatalf("wrong type: %v", err)
 	}
-	if _, err := Post(ctx, srv.Client(), srv.URL, "application/json", bytes.Repeat([]byte("x"), 10), 8); !errors.Is(err, ErrTooLarge) {
+	if _, err := post("application/json", bytes.Repeat([]byte("x"), 10), 8); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("too large: %v", err)
 	}
 }

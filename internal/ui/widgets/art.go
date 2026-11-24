@@ -60,27 +60,39 @@ type placeholderKey struct {
 	glyph   string
 	px      int
 	radius  float64
+	fonts   uint64 // the font engine's generation, for a placeholder with a letter
 }
 
 // placeholderKeys remembers the image key of each placeholder drawn lately,
 // so that a frame formats none. Only the UI thread draws.
 var placeholderKeys = map[placeholderKey]string{}
 
-// placeholder draws spec's generated art, size design pixels square, into box.
-func placeholder(u *ui.Context, spec ArtSpec, size int, radius float64, box gfx.Rect) {
-	px := u.Px(float32(size))
-	// Draw at the rasterised size so the copy stays 1:1.
-	k := float32(px) / (float32(size) * u.Scale)
-	pk := placeholderKey{spec.Hue, spec.Variant, spec.Glyph, px, radius}
+// placeholderImageKey is the image key of spec's placeholder px pixels square.
+// One that shows a letter names the fonts it was drawn in, so that a letter
+// drawn as a box before its font arrived is drawn again with it.
+func placeholderImageKey(u *ui.Context, spec ArtSpec, px int, radius float64) string {
+	var fonts uint64
+	if spec.Variant%4 == 2 && spec.Glyph != "" {
+		fonts = u.Fonts.Generation()
+	}
+	pk := placeholderKey{spec.Hue, spec.Variant, spec.Glyph, px, radius, fonts}
 	key, ok := placeholderKeys[pk]
 	if !ok {
 		if len(placeholderKeys) >= 4096 {
 			clear(placeholderKeys)
 		}
-		key = fmt.Sprintf("art:%g:%d:%s:%d:%g", spec.Hue, spec.Variant, spec.Glyph, px, radius)
+		key = fmt.Sprintf("art:%g:%d:%s:%d:%g:%d", spec.Hue, spec.Variant, spec.Glyph, px, radius, fonts)
 		placeholderKeys[pk] = key
 	}
-	u.Image(key, func() *image.NRGBA {
+	return key
+}
+
+// placeholder draws spec's generated art, size design pixels square, into box.
+func placeholder(u *ui.Context, spec ArtSpec, size int, radius float64, box gfx.Rect) {
+	px := u.Px(float32(size))
+	// Draw at the rasterised size so the copy stays 1:1.
+	k := float32(px) / (float32(size) * u.Scale)
+	u.Image(placeholderImageKey(u, spec, px, radius), func() *image.NRGBA {
 		var glyph *image.NRGBA
 		gx, gy := 0, 0
 		if spec.Variant%4 == 2 && spec.Glyph != "" {

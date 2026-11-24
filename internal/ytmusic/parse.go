@@ -240,6 +240,7 @@ func parseSearch(body []byte, f Filter) ([]Item, error) {
 	}
 	sections := list.sections()
 	known := false
+	results, recognised := 0, 0 // rows, and rows of a shape read here
 	for _, s := range sections {
 		if s.Card != nil {
 			known = true
@@ -250,28 +251,39 @@ func parseSearch(body []byte, f Filter) ([]Item, error) {
 				continue
 			}
 			known = true
-			recognised := 0
+			n := 0
 			for _, c := range rs.Contents {
 				if c.Item == nil {
+					// A shelf holds results alone; an item section may hold
+					// the message that there are none.
+					if rs == s.Shelf {
+						results++
+					}
 					continue
 				}
+				results++
 				if c.Item.recognised() {
-					recognised++
+					n++
 				}
 				add(fromRow(c.Item))
 			}
+			recognised += n
 			// A filtered shelf holds rows of the shapes read here, even when
 			// they are kinds left out, as music videos among songs. Not one
 			// row recognised means the rows have changed.
-			if f != All && rs == s.Shelf && len(rs.Contents) > 0 && recognised == 0 {
+			if f != All && rs == s.Shelf && len(rs.Contents) > 0 && n == 0 {
 				return nil, ErrChanged
 			}
 		}
 	}
 	// Finding nothing, YouTube Music still sends an item section, holding a
-	// message. Sections none of which is known mean the shape has changed.
+	// message. Sections none of which is known mean the shape has changed,
+	// and so do results none of which is.
 	if len(sections) > 0 && !known {
 		return nil, ErrChanged
+	}
+	if results > 0 && recognised == 0 {
+		return nil, fmt.Errorf("%w: none of %d results has a shape read here", ErrChanged, results)
 	}
 	return out, nil
 }

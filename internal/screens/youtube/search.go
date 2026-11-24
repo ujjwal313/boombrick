@@ -205,7 +205,7 @@ func (s *Search) Draw(u *ui.Context) {
 	s.offline = !u.Status.Online
 	if s.offline {
 		widgets.DrawBackground(u, widgets.StateGround)
-		widgets.OfflineState(u, &s.offMsg, "YouTube Music needs Wi-Fi or a hotspot — your downloads still play.")
+		widgets.OfflineState(u, &s.offMsg, "YouTube Music needs Wi-Fi or a hotspot — your downloads still play.", true)
 		widgets.StatusBar(u)
 		widgets.Tabs(u, tab)
 		widgets.HintBar(u, offlineHints)

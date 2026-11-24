@@ -155,3 +155,13 @@ func (p Profile) FirmwarePower() bool { return p.Firmware == Knulli }
 // QuitChord reports whether Start pressed with Menu held quits, as Knulli's
 // ports quit with Function, the Brick's Menu, and Start.
 func (p Profile) QuitChord() bool { return p.Firmware == Knulli }
+
+// MusicPlace is where the music folder is, in words, as the empty library
+// says it: on Knulli the music folder beside roms in the SHARE partition,
+// as the card shows it on a computer. "" leaves the SD card's Music folder.
+func (p Profile) MusicPlace() string {
+	if p.Firmware == Knulli {
+		return "the music folder beside roms"
+	}
+	return ""
+}

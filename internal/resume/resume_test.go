@@ -302,3 +302,20 @@ func TestAPendingTrackLeavesAlbumProgressAlone(t *testing.T) {
 		t.Fatalf("progress %+v, %v", got, err)
 	}
 }
+
+func TestStationsAreKept(t *testing.T) {
+	db := openDB(t)
+	s := player.Snapshot{Queue: []player.Track{
+		{Title: "Radio X", Artist: "India", Cover: "https://x/logo.png", StationID: "u1", Stream: "http://s/x"},
+	}, Order: []int{0}}
+	if err := Save(db, s); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := Load(db)
+	if err != nil || !ok || !reflect.DeepEqual(got.Queue, s.Queue) {
+		t.Fatalf("loaded %+v, %v, %v", got, ok, err)
+	}
+	if !got.Queue[0].Live() {
+		t.Fatal("the station isn't live after loading")
+	}
+}

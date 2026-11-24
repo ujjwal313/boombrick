@@ -4,7 +4,6 @@
 package netx
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -40,6 +39,29 @@ func NewClient() *http.Client {
 type lazyTransport func() *http.Transport
 
 func (t lazyTransport) RoundTrip(r *http.Request) (*http.Response, error) { return t().RoundTrip(r) }
+
+// CloseIdleConnections closes the transport's idle connections, so that the
+// client's method of that name does what it says. It makes the transport if
+// no request has.
+func (t lazyTransport) CloseIdleConnections() { t().CloseIdleConnections() }
+
+// NewClientWith returns a client set up as NewClient's, with a transport of
+// its own that passes each connection through wrap as it is made, under TLS
+// when there is TLS. Its transport too is made on the first request.
+func NewClientWith(wrap func(net.Conn) net.Conn) *http.Client {
+	return &http.Client{Transport: lazyTransport(sync.OnceValue(func() *http.Transport {
+		t := newTransport()
+		dial := t.DialContext
+		t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := dial(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return wrap(c), nil
+		}
+		return t
+	}))}
+}
 
 func newTransport() *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
@@ -112,22 +134,12 @@ func Get(ctx context.Context, c *http.Client, url string, limit int64) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	return do(c, req, limit)
+	return Do(c, req, limit)
 }
 
-// Post sends body to url as contentType and returns the response's body, as
-// Get does.
-func Post(ctx context.Context, c *http.Client, url, contentType string, body []byte, limit int64) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", contentType)
-	return do(c, req, limit)
-}
-
-// do sends req and reads the response.
-func do(c *http.Client, req *http.Request, limit int64) ([]byte, error) {
+// Do sends req, for a request Get can't make, and returns the response's body
+// as Get does.
+func Do(c *http.Client, req *http.Request, limit int64) ([]byte, error) {
 	resp, err := send(c, req)
 	if err != nil {
 		return nil, err

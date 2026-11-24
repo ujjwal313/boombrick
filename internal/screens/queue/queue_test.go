@@ -29,11 +29,12 @@ type fakePlayer struct {
 	version uint64
 	played  []int
 	moves   int
+	song    string // what the station playing says it plays
 }
 
 func (p *fakePlayer) State() player.State {
 	s := player.State{Queued: len(p.tracks) > 0, Index: p.pos, Count: len(p.tracks), Version: p.version, Playing: true,
-		Elapsed: 93 * time.Second, Duration: 222 * time.Second}
+		Elapsed: 93 * time.Second, Duration: 222 * time.Second, LiveTitle: p.song}
 	if s.Queued {
 		s.Track = p.tracks[p.pos]
 	}
@@ -308,19 +309,73 @@ func TestQueueScrolled(t *testing.T) {
 }
 
 // Frames drawn again allocate nothing, with a row lifted or not: the rows,
-// the panel's lines and the hint bars are made once.
+// the panel's lines and the hint bars are made once, an empty line too.
 func TestFramesDrawnAgainAllocateNothing(t *testing.T) {
 	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
 	u.Status = fixture.Status()
 	u.Now = t0
-	q := New(sample())
-	for _, lifted := range []bool{false, true} {
-		if lifted {
-			q.Handle(press(input.X), t0)
+	nameless := stations()
+	nameless.song, nameless.tracks[0].Title = "", "" // the panel's line is empty
+	for name, p := range map[string]*fakePlayer{"songs": sample(), "stations": stations(), "a nameless station": nameless} {
+		q := New(p)
+		for _, lifted := range []bool{false, true} {
+			if lifted {
+				q.Handle(press(input.X), t0)
+			}
+			q.Draw(u)
+			if n := testing.AllocsPerRun(10, func() { q.Draw(u) }); n != 0 {
+				t.Errorf("%s, lifted %v: a frame allocates %v times", name, lifted, n)
+			}
 		}
-		q.Draw(u)
-		if n := testing.AllocsPerRun(10, func() { q.Draw(u) }); n != 0 {
-			t.Errorf("lifted %v: a frame allocates %v times", lifted, n)
-		}
+	}
+}
+
+// stations is a queue of stations from the Radio tab, the first playing and
+// sending the song it plays.
+func stations() *fakePlayer {
+	p := &fakePlayer{song: "Monsoon Letters"}
+	for _, s := range [][3]string{{"Radio City", "India", "https://logos.radio.test/city.png"},
+		{"Deep Space One", "The United States Of America", "https://logos.radio.test/space.png"},
+		{"World News Live", "United Kingdom", ""}, {"Jazz Lounge", "France", "https://logos.radio.test/jazz.png"},
+		{"Kantipur FM", "Nepal", ""}} {
+		p.tracks = append(p.tracks, player.Track{Title: s[0], Artist: s[1], Cover: s[2], StationID: s[0],
+			Stream: "http://stream.radio.test/" + s[0]})
+	}
+	return p
+}
+
+// Stations show their logo, their name over their country and "Live" where
+// a song's length goes; the panel shows the song the station sends and its
+// name, with "Live" in place of the times.
+func TestQueueOfStations(t *testing.T) {
+	p := stations()
+	q := New(p)
+	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.Accent = theme.Fallback() // gold, as for every station
+	u.Status = fixture.Status()
+	u.Status.NowPlaying = p.song
+	u.Now = t0
+	q.Draw(u)
+	img := off.Image()
+	if r := q.row(0); r.duration != "Live" || r.art.Glyph != "D" {
+		t.Fatalf("Deep Space One's row: %q, art %+v", r.duration, r.art)
+	}
+	if q.line != "Monsoon Letters · Radio City" {
+		t.Fatalf("the panel shows %q", q.line)
+	}
+	p.song = "" // the station says nothing of what it plays
+	render(t, q, t0)
+	if q.line != "Radio City" {
+		t.Fatalf("with no song, the panel shows %q", q.line)
+	}
+	uitest.Golden(t, "queue-stations", img)
+}
+
+// The header's time counts songs alone: with only stations, it is the count.
+func TestHeaderOfStations(t *testing.T) {
+	q := New(stations())
+	q.refresh(t0)
+	if q.header != "5 tracks" {
+		t.Fatalf("header %q", q.header)
 	}
 }

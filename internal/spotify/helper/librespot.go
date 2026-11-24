@@ -47,6 +47,9 @@ const (
 	// keepMax how many: each holds what it has downloaded.
 	keepFor = time.Minute
 	keepMax = 2
+	// refusedFor is how long the streams of an account Spotify gives no keys
+	// are refused without asking, before one asks again.
+	refusedFor = 2 * time.Minute
 	// Listing limits: rootlist entries per request, and the most pages and
 	// tracks a list is read to.
 	rootlistPage = 500
@@ -72,6 +75,10 @@ type Librespot struct {
 	st       spotify.State
 	login    *spotify.Login
 	premium  bool
+	free     bool      // as premium, only once the access point has said so
+	keyed    bool      // the session has been given a key
+	refused  time.Time // when a key was first refused, before one was given
+	refusing time.Time // until when the account's streams are refused without asking
 	country  string
 	name     string            // the account's display name, once looked up
 	names    map[string]string // display names by user ID
@@ -237,7 +244,7 @@ func (s *Librespot) Logout() error {
 	}
 	s.attempt++
 	s.dropLocked()
-	s.login, s.premium, s.name = nil, false, ""
+	s.login, s.premium, s.free, s.name = nil, false, false, ""
 	s.state.Credentials.Username, s.state.Credentials.Data = "", nil
 	s.setLocked(spotify.SignedOut)
 	return s.store.Save(s.state)
@@ -390,11 +397,17 @@ func (s *Librespot) Stream(ctx context.Context, id string, ms int64, kbps int, l
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", spotify.ErrUnavailable, err)
 	}
+	if s.freeOn(sess) {
+		return nil, spotify.ErrPremium // not worth asking for a key
+	}
+	if s.refusedOn(sess) {
+		return nil, spotify.ErrRefused
+	}
 	s.log.Info("open stream", "id", id, "kbps", kbps)
 	o, err := s.open(ctx, sess, *sid, kbps, level, ms)
 	if err != nil {
 		s.log.Warn("open stream", "id", id, "err", err)
-		return nil, classify(err)
+		return nil, s.refusal(sess, err)
 	}
 	return s.adopt(key, o, o.duration, sess), nil
 }
@@ -462,7 +475,8 @@ func (s *Librespot) connect(n int) {
 // listens for what the access point says about the account: only packets
 // that arrive after this are heard.
 func (s *Librespot) attachLocked(sess *session.Session) {
-	s.sess, s.premium, s.country = sess, false, ""
+	s.sess, s.premium, s.free, s.country = sess, false, false, ""
+	s.keyed, s.refused, s.refusing = false, time.Time{}, time.Time{}
 	s.setLocked(spotify.Ready)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -481,7 +495,8 @@ func (s *Librespot) attachLocked(sess *session.Session) {
 			if s.sess == sess {
 				switch pkt.Type {
 				case ap.PacketTypeProductInfo:
-					s.premium = productType(pkt.Payload) == "premium"
+					typ := productType(pkt.Payload)
+					s.premium, s.free = typ == "premium", typ == "free"
 				case ap.PacketTypeCountryCode:
 					s.country = string(pkt.Payload)
 				}
@@ -666,6 +681,61 @@ func (s *Librespot) expire() {
 	if len(left) > 0 {
 		s.keepTick = time.AfterFunc(time.Until(left[0].until), s.expire)
 	}
+}
+
+// freeOn reports whether the access point has said sess's account is free;
+// false once sess has been replaced.
+func (s *Librespot) freeOn(sess *session.Session) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sess == sess && s.free
+}
+
+// refusedOn reports whether sess's account is being refused its streams
+// without asking; false once sess has been replaced.
+func (s *Librespot) refusedOn(sess *session.Session) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sess == sess && time.Now().Before(s.refusing)
+}
+
+// gotKey notes that sess has been given a key, so its account has them.
+func (s *Librespot) gotKey(sess *session.Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sess == sess {
+		s.keyed, s.refused, s.refusing = true, time.Time{}, time.Time{}
+	}
+}
+
+// refusal is why a stream didn't open on sess. A refused key is waited out,
+// as Spotify's pause after a burst of keys. But on a session that has had no
+// key, refused again once that wait is over, the account is taken as refused:
+// Spotify gives some accounts, Premium ones too, no keys at all. On a free
+// account it needs Premium, as waiting would never end.
+func (s *Librespot) refusal(sess *session.Session, err error) error {
+	var key *audio.KeyProviderError
+	if !errors.As(err, &key) {
+		return classify(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case s.sess != sess || s.keyed:
+		return classify(err)
+	case s.free:
+		return fmt.Errorf("%w: %w", spotify.ErrPremium, err)
+	case s.refused.IsZero():
+		s.refused = time.Now()
+		return classify(err)
+	case time.Since(s.refused) < spotify.KeyWait:
+		return classify(err)
+	}
+	if s.refusing.IsZero() {
+		s.log.Warn("spotify refuses this account's keys", "since", s.refused)
+	}
+	s.refusing = time.Now().Add(refusedFor)
+	return fmt.Errorf("%w: %w", spotify.ErrRefused, err)
 }
 
 // classify turns go-librespot's errors into the helper's.

@@ -10,6 +10,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
+	"github.com/ujjwal313/boombrick/internal/radio"
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/spotify"
@@ -139,15 +140,21 @@ const maxContinue = 4
 func ContinueRow(progress []resume.Progress, ix *library.Index, play func(a *library.Album, track int, frame int64),
 	queue func(*library.Album)) (fixture.Row, bool) {
 	var items []fixture.Item
+	var shown []*library.Album
 	for _, pr := range progress {
 		a := ix.Album(pr.Artist, pr.Album)
 		if a == nil {
+			// Renamed since, as when a scan took "(Disc 1)" off its name.
+			a = ix.AlbumOf(pr.Path)
+		}
+		if a == nil || slices.Contains(shown, a) {
 			continue
 		}
 		track := slices.IndexFunc(a.Tracks, func(t library.Track) bool { return t.Path == pr.Path })
 		if track < 0 {
 			continue
 		}
+		shown = append(shown, a)
 		frame := pr.Frame
 		// The badge is the continued track's: an album may mix downloads with files of its own.
 		it := fixture.Item{Title: a.Title, Subtitle: a.Artist, Art: screens.AlbumArt(a),
@@ -223,6 +230,25 @@ func SpotifyRow(pls []spotify.Playlist, open, imp func(spotify.Playlist)) (fixtu
 		meta = "1 playlist"
 	}
 	return fixture.Row{Title: "Spotify playlists", Meta: meta, Cards: true, Spotify: true, Items: items}, true
+}
+
+// RadioRow is the saved stations, the latest saved first; play starts the
+// one at index i with the row as the queue. A card only plays, so X and Y do
+// nothing on it. It reports false when no station is saved.
+func RadioRow(saved []radio.Station, play func(i int)) (fixture.Row, bool) {
+	if len(saved) == 0 {
+		return fixture.Row{}, false
+	}
+	items := make([]fixture.Item, len(saved))
+	for i, st := range saved {
+		items[i] = fixture.Item{Title: st.Name, Subtitle: st.Country, Art: screens.StationArt(st.Name, st.Logo),
+			Play: func() { play(i) }}
+	}
+	meta := fmt.Sprintf("%d stations", len(saved))
+	if len(saved) == 1 {
+		meta = "1 station"
+	}
+	return fixture.Row{Title: "Radio", Meta: meta, Cards: true, Items: items}, true
 }
 
 // source is where album a's files came from, for its badge: Downloaded for
@@ -431,7 +457,7 @@ func (h *Home) Draw(u *ui.Context) {
 	u.PopClip()
 
 	widgets.StatusBar(u)
-	widgets.Tabs(u, 0)
+	widgets.Tabs(u, widgets.TabHome)
 	widgets.HintBar(u, h.hints())
 }
 
@@ -441,15 +467,14 @@ func (h *Home) drawEmpty(u *ui.Context) {
 	switch {
 	case h.set:
 		widgets.DrawBackground(u, widgets.StateGround)
-		widgets.EmptyState(u, &h.state, "Your library is empty",
-			"Copy music to the Music folder on the SD card, or find something on YouTube Music.", h.musicDir)
+		widgets.EmptyState(u, &h.state, "Your library is empty", screens.EmptyLibraryText(), h.musicDir)
 	case h.reading:
 		screens.DrawReading(u, &h.state, h.musicDir)
 	default:
 		widgets.DrawBackground(u, widgets.TabGround)
 	}
 	widgets.StatusBar(u)
-	widgets.Tabs(u, 0)
+	widgets.Tabs(u, widgets.TabHome)
 	widgets.HintBar(u, h.hints())
 }
 
@@ -520,4 +545,13 @@ func (h *Home) hints() []widgets.Hint {
 	hints = append(hints, widgets.Hint{Key: "L1/R1", Label: "Tabs"})
 	h.hintBars[k] = hints
 	return hints
+}
+
+// RowTitles are the titles of the rows shown, top to bottom.
+func (h *Home) RowTitles() []string {
+	titles := make([]string, len(h.rows))
+	for i, r := range h.rows {
+		titles[i] = r.Title
+	}
+	return titles
 }

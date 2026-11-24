@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/media"
@@ -64,6 +65,9 @@ type Options struct {
 	// Pause is the wait between searches, a second unless set: YouTube
 	// Music is asked at the pace a person would.
 	Pause time.Duration
+	// Off starts it switched off, as with Spotify or YouTube off (see
+	// SetEnabled).
+	Off bool
 }
 
 // The waits while matching can't go on: offline, and after a search failed.
@@ -84,6 +88,7 @@ type Importer struct {
 	done  chan struct{}
 	now   func() time.Time
 	waits [2]time.Duration // offline, and after a failed search; tests shorten them
+	off   atomic.Bool      // switched off: nothing is matched (see SetEnabled)
 
 	mu   sync.Mutex
 	jobs []*job
@@ -127,8 +132,17 @@ func New(o Options) (*Importer, error) {
 		stop()
 		return nil, err
 	}
+	im.off.Store(o.Off)
 	go im.run()
 	return im, nil
+}
+
+// SetEnabled switches matching on or off, as Spotify and YouTube are: while
+// it is off nothing is matched, and the songs wait. A song being matched is
+// finished.
+func (im *Importer) SetEnabled(on bool) {
+	im.off.Store(!on)
+	signal(im.wake)
 }
 
 // Ready receives a value when an import has moved on.
@@ -266,7 +280,7 @@ func (im *Importer) Use(uri, id string, c int) {
 	im.touch(j, e)
 	im.mu.Unlock()
 	if old != "" && old != song.VideoID {
-		im.remove(old) // another candidate was queued for it
+		im.remove(removal{video: old}) // another candidate was queued for it
 	}
 	im.o.Get([]ytmusic.Song{song})
 	signal(im.wake)
@@ -289,7 +303,7 @@ func (im *Importer) Skip(uri, id string) {
 	im.touch(j, e)
 	im.mu.Unlock()
 	if queued != "" {
-		im.remove(queued)
+		im.remove(removal{queued, id})
 	}
 	signal(im.wake)
 }
@@ -303,7 +317,7 @@ func (im *Importer) Cancel(uri string) {
 		im.mu.Unlock()
 		return
 	}
-	var queued []string
+	var queued []removal
 	for _, e := range j.items {
 		switch e.State {
 		case Waiting:
@@ -312,23 +326,49 @@ func (im *Importer) Cancel(uri string) {
 		case Matched, Accepted:
 			v := e.Candidates[e.Chosen].Song.VideoID
 			if st, _ := im.o.State(v); st != media.Saved {
-				queued = append(queued, v)
+				queued = append(queued, removal{v, e.Track.ID})
 				e.State = Skipped
 				im.touch(j, e)
 			}
 		}
 	}
 	im.mu.Unlock()
-	for _, v := range queued {
-		im.remove(v)
-	}
+	im.remove(queued...)
 	signal(im.wake)
 }
 
-// remove takes a song out of the download queue unless it has been saved.
-func (im *Importer) remove(videoID string) {
-	if st, _ := im.o.State(videoID); st != media.Saved {
-		im.o.Remove(videoID)
+// removal is a download to take out of the queue: its video, and the Spotify
+// song it was for, or "" when the song stays queued as another video.
+type removal struct{ video, song string }
+
+// remove takes downloads out of the queue, except those saved and those
+// another import still counts on: imports can share a song's download, as a
+// playlist's and the song's own do. One that has the song queued counts on
+// the video, and one that found it queued (Have) on the song.
+func (im *Importer) remove(rs ...removal) {
+	if len(rs) == 0 {
+		return
+	}
+	videos, songs := map[string]bool{}, map[string]bool{}
+	im.mu.Lock()
+	for _, j := range im.jobs {
+		for _, e := range j.items {
+			switch e.State {
+			case Matched, Accepted:
+				videos[e.Candidates[e.Chosen].Song.VideoID] = true
+			case Have:
+				songs[e.Track.ID] = true
+			}
+		}
+	}
+	im.mu.Unlock()
+	for _, r := range rs {
+		if videos[r.video] || r.song != "" && songs[r.song] {
+			continue
+		}
+		if st, _ := im.o.State(r.video); st != media.Saved {
+			im.o.Remove(r.video)
+		}
 	}
 }
 
@@ -380,6 +420,12 @@ func (im *Importer) run() {
 		j, e := im.next()
 		if e == nil {
 			if !im.sleep(-1) {
+				return
+			}
+			continue
+		}
+		if im.off.Load() {
+			if !im.sleep(-1) { // until switched on
 				return
 			}
 			continue

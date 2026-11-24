@@ -28,8 +28,8 @@ type Source interface {
 	SetPaused(on bool)
 }
 
-// tab is the Downloads tab's place in the tab row.
-const tab = 4
+// tab is the Downloads tab's ID.
+const tab = widgets.TabDownloads
 
 // Layout: the storage card under the tabs, then the queue
 // in 66 px rows, each heading a row of its own.

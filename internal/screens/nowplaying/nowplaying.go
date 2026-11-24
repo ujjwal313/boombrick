@@ -29,6 +29,7 @@ type Player interface {
 	Prev()
 	SetShuffle(on bool)
 	CycleRepeat()
+	Seek(d time.Duration)
 }
 
 // Controls, left to right.
@@ -49,6 +50,14 @@ const lyricsPill = controlCount
 const lyricsH = 48
 
 var lyricsText = text.Style{Face: text.Figtree, Size: 22}
+
+// The Live pill, in a station's progress bar's place: 30 high with a 1.5 px
+// border, holding an 8 px dot and "Live", 8 apart, with padding 12 each side.
+const (
+	liveH   = 30
+	liveDot = 8
+	livePad = 12
+)
 
 // controlOffset is each control's centre relative to the column's centre, in
 // design pixels. Fixed offsets keep prev and next clear of the 108 px
@@ -85,27 +94,36 @@ type NowPlaying struct {
 	lyrics    func()                                              // opens the Lyrics screen; nil: no pill
 	downloads func(videoID string) (media.DownloadState, float32) // how far a song waited on has got; nil: none
 	note      func() string                                       // why the queue waits, or ""; nil: none
+	scrub     *screens.Scrub                                      // L2 and R2
 
 	// What the frames show, made again only when it changes.
 	elapsed, length screens.ClockText
 	format          string
 	formatOf        formatKey
+	station         string    // "Radio City · India", under the song a station sends
+	stationOf       [2]string // the station's name and country in station
 	hintBar         []widgets.Hint
 	hintLabel       string // A's label in hintBar
+	hintLive        bool   // hintBar is a station's, with no lyrics or seeking
 }
 
 // formatKey is what formatLine depends on.
 type formatKey struct {
 	kbps, rate int
 	format     string
+	live       bool
 }
 
 // New creates the screen with focus on play/pause.
 func New(p Player) *NowPlaying {
-	n := &NowPlaying{p: p, focus: playCtl}
+	n := &NowPlaying{p: p, focus: playCtl, scrub: screens.NewScrub(p)}
 	n.values[playCtl].Set(1)
 	return n
 }
+
+// SetHeld tells the screen whether a button is down, so that a scrub whose
+// trigger was let go elsewhere is dropped.
+func (n *NowPlaying) SetHeld(held func(input.Button) bool) { n.scrub.SetHeld(held) }
 
 // SetLyrics gives the screen its Lyrics pill and Y button, which call open.
 func (n *NowPlaying) SetLyrics(open func()) { n.lyrics, n.hintBar = open, nil }
@@ -123,9 +141,25 @@ func (n *NowPlaying) ShowsDownloads() bool {
 	return s.Waiting || s.Track.Pending()
 }
 
+// hasLyrics reports whether the screen offers lyrics for s's track. A
+// station has none.
+func (n *NowPlaying) hasLyrics(s player.State) bool { return n.lyrics != nil && !s.Track.Live() }
+
+// keepFocus moves focus off the Lyrics pill, back to play/pause, when the
+// track has no lyrics: a station started while focus rested there.
+func (n *NowPlaying) keepFocus(s player.State) {
+	if n.focus == lyricsPill && !n.hasLyrics(s) {
+		n.values[lyricsPill].Set(0)
+		n.focus = playCtl
+		n.values[playCtl].Set(1)
+	}
+}
+
 // source is where the track comes from, for its badge.
 func source(t player.Track) media.Source {
 	switch {
+	case t.Live():
+		return media.Radio
 	case t.Streamed():
 		return media.Spotify
 	case t.Pending():
@@ -203,12 +237,18 @@ func (n *NowPlaying) moveTo(f int, now time.Time) {
 	n.values[f].To(1, now, anim.Focus, anim.EaseOutCubic)
 }
 
-// Handle moves focus along the controls, activates them with A and changes
-// track with L1 and R1. B is handled by the app, which closes the screen.
+// Handle moves focus along the controls, activates them with A, changes
+// track with L1 and R1 and seeks with L2 and R2. B is handled by the app,
+// which closes the screen. A station has no lyrics, and can't seek.
 func (n *NowPlaying) Handle(ev input.Event, now time.Time) bool {
+	if n.scrub.Handle(ev, now) {
+		return true
+	}
 	if ev.Kind == input.Release {
 		return false
 	}
+	s := n.p.State()
+	n.keepFocus(s)
 	switch ev.Button {
 	case input.Left, input.Right:
 		if n.focus == lyricsPill {
@@ -225,7 +265,7 @@ func (n *NowPlaying) Handle(ev input.Event, now time.Time) bool {
 		n.moveTo(f, now)
 		return true
 	case input.Down:
-		if n.lyrics == nil || n.focus == lyricsPill {
+		if !n.hasLyrics(s) || n.focus == lyricsPill {
 			return false
 		}
 		n.moveTo(lyricsPill, now)
@@ -243,7 +283,7 @@ func (n *NowPlaying) Handle(ev input.Event, now time.Time) bool {
 		n.activate()
 		return true
 	case input.Y:
-		if ev.Kind != input.Press || n.lyrics == nil {
+		if ev.Kind != input.Press || !n.hasLyrics(s) {
 			return false
 		}
 		n.lyrics()
@@ -276,12 +316,22 @@ func (n *NowPlaying) activate() {
 }
 
 // Tick asks for frames 4 times a second while music plays, for the progress
-// bar.
-func (n *NowPlaying) Tick() time.Duration { return 250 * time.Millisecond }
+// bar. A station has none, so it asks once a second, as the tabs do: the
+// player wakes no one when the station's song changes or it connects, so a
+// tick is how the screen sees that.
+func (n *NowPlaying) Tick() time.Duration {
+	if n.p.State().Track.Live() {
+		return time.Second
+	}
+	return 250 * time.Millisecond
+}
 
-// Animating reports whether focus is moving. The progress bar is redrawn on
-// Tick while music plays.
+// Animating reports whether focus is moving or a trigger is down for a
+// scrub. The progress bar is redrawn on Tick while music plays.
 func (n *NowPlaying) Animating(now time.Time) bool {
+	if n.scrub.Active() {
+		return true
+	}
 	for i := range n.values {
 		if !n.values[i].Done(now) {
 			return true
@@ -292,7 +342,9 @@ func (n *NowPlaying) Animating(now time.Time) bool {
 
 // Draw renders the frame.
 func (n *NowPlaying) Draw(u *ui.Context) {
-	s := n.p.State()
+	s := n.scrub.Shown(n.p.State(), u.Now)
+	n.keepFocus(s)
+	live := s.Track.Live()
 	widgets.DrawBackground(u, widgets.NowPlayingGround)
 	status := u.Status
 	u.Status.NowPlaying = "" // the screen itself shows what's playing
@@ -309,36 +361,72 @@ func (n *NowPlaying) Draw(u *ui.Context) {
 	x := art.X + artSize + colGap
 	w := float32(theme.ScreenW) - side - x
 	titleH, artistH, albumH, timeH := u.LineHeight(titleStyle), u.LineHeight(artistStyle), u.LineHeight(albumStyle), u.LineHeight(timeStyle)
-	h := 32 + groupGap + titleH + artistH + albumH + groupGap + knob + 8 + timeH + groupGap + ctlRow
-	if n.lyrics != nil {
+	barH := float32(knob)
+	if live { // no album line, and the Live pill in the progress bar's place
+		albumH, barH = 0, liveH
+	}
+	h := 32 + groupGap + titleH + artistH + albumH + groupGap + barH + 8 + timeH + groupGap + ctlRow
+	if n.hasLyrics(s) {
 		h += groupGap + lyricsH
 	}
 	y := top + (bottom-top-h)/2
 
-	bw := widgets.Badge(u, source(s.Track), x, y, false)
-	if k := (formatKey{s.Kbps, s.Rate, s.Format}); k != n.formatOf {
+	// Spotify's and Radio's badges fade while offline.
+	src := source(s.Track)
+	bw := widgets.Badge(u, src, x, y, (src == media.Spotify || src == media.Radio) && !u.Status.Online)
+	if k := (formatKey{s.Kbps, s.Rate, s.Format, live}); k != n.formatOf {
 		n.format, n.formatOf = formatLine(s), k
 	}
 	u.Text(n.format, formatStyle, x+bw+12, u.CenterY(formatStyle, y, 32), theme.Ink3)
 	y += 32 + groupGap
-	u.Text(u.Fit(s.Track.Title, titleStyle, w), titleStyle, x, y, theme.Paper)
+	// A station's song goes over its name and country; with none, its name
+	// over its country.
+	title, artist := s.Track.Title, s.Track.Artist
+	if live && s.LiveTitle != "" {
+		title, artist = s.LiveTitle, n.stationLine(s.Track)
+	}
+	u.Text(u.Fit(title, titleStyle, w), titleStyle, x, y, theme.Paper)
 	y += titleH
-	u.Text(u.Fit(s.Track.Artist, artistStyle, w), artistStyle, x, y, theme.Paper)
+	u.Text(u.Fit(artist, artistStyle, w), artistStyle, x, y, theme.Paper)
 	y += artistH
-	u.Text(u.Fit(s.Track.Album, albumStyle, w), albumStyle, x, y, theme.Ink2)
+	if !live {
+		u.Text(u.Fit(s.Track.Album, albumStyle, w), albumStyle, x, y, theme.Ink2)
+	}
 	y += albumH + groupGap
-	f, left, right := n.progress(s)
-	drawProgress(u, f, left, right, x, y, w)
-	y += knob + 8 + timeH + groupGap
+	if live {
+		drawLive(u, s, x, y)
+	} else {
+		f, left, right := n.progress(s)
+		drawProgress(u, f, left, right, x, y, w)
+	}
+	y += barH + 8 + timeH + groupGap
 	n.drawControls(u, s, x, y, w)
-	if n.lyrics != nil {
+	if n.hasLyrics(s) {
 		n.drawLyricsPill(u, x, y+ctlRow+groupGap)
 	}
 
 	widgets.HintBar(u, n.hints(s))
 }
 
+// stationLine is "Radio City · India", the station's name and country,
+// made again only when the station changes.
+func (n *NowPlaying) stationLine(t player.Track) string {
+	if of := [2]string{t.Title, t.Artist}; n.station == "" || of != n.stationOf {
+		n.station, n.stationOf = t.Title, of
+		if t.Artist != "" {
+			n.station += " · " + t.Artist
+		}
+	}
+	return n.station
+}
+
 func formatLine(s player.State) string {
+	if s.Track.Live() { // the codec, and the bitrate when the station gives one
+		if s.Kbps > 0 && s.Format != "" {
+			return s.Format + " · " + strconv.Itoa(s.Kbps) + " kbps"
+		}
+		return s.Format
+	}
 	if s.Kbps > 0 {
 		return strconv.Itoa(s.Kbps) + " kbps"
 	}
@@ -367,6 +455,30 @@ func drawProgress(u *ui.Context, f float32, left, right string, x, y, w float32)
 	ty := y + knob + 8
 	u.Text(left, timeStyle, x, ty, theme.Ink2)
 	u.Text(right, timeStyle, x+w-u.TextWidth(right, timeStyle), ty, theme.Ink2)
+}
+
+// drawLive draws a station's Live pill at (x, y), in the accent, or ink3
+// while paused. Below it, where a song's times go, it says when the stream is
+// opening or being picked up again.
+func drawLive(u *ui.Context, s player.State, x, y float32) {
+	col := u.Accent.Color
+	if !s.Playing {
+		col = theme.Ink3
+	}
+	w := livePad + liveDot + 8 + u.TextWidth("Live", text.Chrome) + livePad
+	u.Shape(raster.Shape{W: int(w), H: liveH, Radius: liveH / 2, Kind: raster.Ring, RingOffset: -1.5, RingWidth: 1.5},
+		gfx.Rect{X: x, Y: y, W: w, H: liveH}, col)
+	u.Shape(raster.Shape{W: liveDot, H: liveDot, Radius: liveDot / 2, Kind: raster.Fill},
+		gfx.Rect{X: x + livePad, Y: y + (liveH-liveDot)/2, W: liveDot, H: liveDot}, col)
+	u.Text("Live", text.Chrome, x+livePad+liveDot+8, u.CenterY(text.Chrome, y, liveH), col)
+	var state string
+	switch {
+	case s.Loading:
+		state = "Connecting…"
+	case s.Stalled:
+		state = "Reconnecting…"
+	}
+	u.Text(state, timeStyle, x, y+liveH+8, theme.Ink2)
 }
 
 // drawControls spreads the five controls across the column, each focusable
@@ -447,13 +559,18 @@ func (n *NowPlaying) hints(s player.State) []widgets.Hint {
 			label = "Play"
 		}
 	}
-	if n.hintBar != nil && label == n.hintLabel {
+	live := s.Track.Live()
+	if n.hintBar != nil && label == n.hintLabel && live == n.hintLive {
 		return n.hintBar
 	}
 	hints := []widgets.Hint{{Key: "A", Label: label}, {Key: "B", Label: "Back"}}
-	if n.lyrics != nil {
+	if n.hasLyrics(s) {
 		hints = append(hints, widgets.Hint{Key: "Y", Label: "Lyrics"})
 	}
-	n.hintBar, n.hintLabel = append(hints, widgets.Hint{Key: "L1/R1", Label: "Track"}), label
+	hints = append(hints, widgets.Hint{Key: "L1/R1", Label: "Track"})
+	if !live {
+		hints = append(hints, widgets.Hint{Key: "L2/R2", Label: "Seek"})
+	}
+	n.hintBar, n.hintLabel, n.hintLive = hints, label, live
 	return n.hintBar
 }

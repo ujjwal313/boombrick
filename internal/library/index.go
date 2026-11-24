@@ -127,6 +127,19 @@ func genresOf(artists []*Artist) []*Genre {
 // Album finds an album by its artist and title, or returns nil.
 func (ix *Index) Album(artist, title string) *Album { return ix.byKey[[2]string{artist, title}] }
 
+// AlbumOf finds the album holding the file at path, or returns nil. It looks
+// through every song, for the few times an album isn't found by its name.
+func (ix *Index) AlbumOf(path string) *Album {
+	for _, a := range ix.Recent {
+		for i := range a.Tracks {
+			if a.Tracks[i].Path == path {
+				return a
+			}
+		}
+	}
+	return nil
+}
+
 // Spotify finds the file an import downloaded of Spotify song id, or
 // returns nil.
 func (ix *Index) Spotify(id string) *Track { return ix.spotify[id] }

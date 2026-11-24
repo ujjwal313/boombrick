@@ -13,6 +13,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 - **Your music:** MP3, FLAC, Opus and M4A (AAC), gapless, with ReplayGain levelling. Browse by album, artist, song or genre; the queue has shuffle and repeat and is kept between launches.
 - **Covers** from the files, folder pictures or the Cover Art Archive.
 - **Synced lyrics** from the files, `.lrc` files or LRCLIB, with the line being sung highlighted.
+- **Every script:** titles and lyrics in Japanese, Chinese, Korean, Arabic, Hebrew, Thai, Hindi and the other main Indian scripts, and emoji. Each script's font is downloaded over Wi-Fi the first time it's needed, then kept on the card.
 - **YouTube Music:** search, browse albums and artists, and download songs as tagged Opus files with covers and lyrics. A song that is still downloading plays as soon as it lands.
 - **Spotify** (Premium): sign in with a code on your phone, then play Liked Songs and your playlists, Spotify's own mixes included, in the same queue as your music. Streams play at 96, 160 or 320 kbps over Wi-Fi.
 - **Spotify import:** download your playlists' songs, or Liked Songs, from YouTube Music to keep them offline. Each song is matched by its ISRC, or its title, artist and length, and you check the doubtful ones. A Spotify song with a downloaded copy plays the copy, without Wi-Fi.
@@ -23,7 +24,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 
 ## Installing
 
-You need a TrimUI Brick or Brick Pro with NextUI, CrossMix or Knulli. Wi-Fi is used for Spotify, YouTube Music, covers, lyrics and updates; music on the card plays without it. Spotify needs a Premium account.
+You need a TrimUI Brick or Brick Pro with NextUI, CrossMix or Knulli. Wi-Fi is used for Spotify, YouTube Music, covers, lyrics, fonts and updates; music on the card plays without it. Spotify needs a Premium account.
 
 1. Download the zip for your firmware:
    - **NextUI:** `Boombrick.pak.zip` from the [latest release](https://github.com/ujjwal313/boombrick/releases/latest).
@@ -31,8 +32,8 @@ You need a TrimUI Brick or Brick Pro with NextUI, CrossMix or Knulli. Wi-Fi is u
    - **Knulli:** `Boombrick-Knulli.zip` from the same release.
 
    `Boombrick-PakStore.zip` holds the same NextUI app for the Pak Store, which unzips it into the app's folder; it isn't for the root of the card.
-2. Unzip it at the root of the SD card; on Knulli, at the root of the SHARE partition. It goes to `Tools/tg5040/Boombrick.pak` on NextUI, `Apps/Boombrick` on CrossMix, and `roms/ports` on Knulli.
-3. Put your music in the card's `Music` folder, in any layout; `Artist/Album/01 Title.flac` works best when files have no tags. On Knulli it's the `music` folder of the SHARE partition, which Knulli also plays in its menus when its background music is on.
+2. Unzip it at the root of the SD card; on Knulli, at the root of the SHARE partition. It goes to `Tools/tg5040/Boombrick.pak` on NextUI, `Apps/Boombrick` on CrossMix, and `roms/ports` on Knulli, where it adds `Boombrick.sh` and a `boombrick` folder. Its folders join the ones already on the card: your other apps and ports stay as they are.
+3. Put your music in the card's `Music` folder, making it if it isn't there; the zip doesn't hold one. On Knulli it's the `music` folder at the root of the SHARE partition, beside `roms` rather than inside it, which Knulli also plays in its menus when its background music is on. Any layout of folders inside it works; `Artist/Album/01 Title.flac` works best when files have no tags. The empty library shows the folder Boombrick reads, and Y there scans it again.
 4. Start Boombrick from Tools on NextUI, from Apps on CrossMix, or from Ports on Knulli (update the game lists first if it isn't there). The library is scanned on the first launch, and again on every launch after that.
 
 Betas are pre-releases: Settings never offers them, so they are only installed by hand. A beta is offered the next full release like any other version.
@@ -53,7 +54,7 @@ The Downloader card updates yt-dlp, which YouTube Music downloads use, the same 
 | X | Download (YouTube Music); shuffle an artist or a genre (Library) |
 | Y | Add to the queue; on Now Playing, lyrics |
 | L1, R1 | Switch tabs; on Now Playing, previous and next track |
-| L2, R2 | Filters in the Library and YouTube Music |
+| L2, R2 | Filters in the Library and YouTube Music; on Now Playing and Lyrics, 10 s back and on, or hold to rewind and fast-forward |
 | Start | Now Playing |
 | Select | Queue |
 | Menu | Quick menu: sleep timer, screen off, play in background, Settings, quit |
@@ -116,6 +117,10 @@ On the desktop the keyboard stands in for the Brick's buttons:
 Add a section for the version to [CHANGELOG.md](CHANGELOG.md), then push a tag such as `v0.1.2`. The Release workflow builds the zips with that version and publishes them, with their `SHA256SUMS` and the changelog section as notes. Bricks running an older version are offered it in Settings.
 
 A tag with a suffix, such as `v0.2.0-beta.1`, is published as a pre-release, which Settings never offers: it is for testers, who install it by hand.
+
+## Support
+
+Boombrick is free. If you'd like to help keep it going, you can [buy me a coffee](https://buymeacoffee.com/ujjwal_).
 
 ## Licence
 

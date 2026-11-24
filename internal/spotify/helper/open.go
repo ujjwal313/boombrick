@@ -68,6 +68,7 @@ func (s *Librespot) open(ctx context.Context, sess *session.Session, id librespo
 	if err != nil {
 		return nil, fmt.Errorf("audio key: %w", err)
 	}
+	s.gotKey(sess) // even if the stream fails after this, the account has keys
 	res, err := sp.ResolveStorageInteractive(ctx, file.GetFileId(), file.Format, false)
 	if err != nil {
 		return nil, fmt.Errorf("storage: %w", err)

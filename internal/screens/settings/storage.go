@@ -14,13 +14,13 @@ import (
 )
 
 // What the Storage page lists, under the card.
-var cacheNames = [...]string{"Art cache", "Lyrics", "Partial downloads", "Downloader"}
+var cacheNames = [...]string{"Art cache", "Lyrics", "Fonts", "Partial downloads", "Downloader"}
 
 var valueText = text.Style{Face: text.Figtree, Size: 22, Tabular: true}
 
 // cacheRowH is the height of the page's rows: lower than Settings' rows, which
-// take focus, so that the card, the four rows and the pill fit above the hints.
-const cacheRowH = 56
+// take focus, so that the card, the five rows and the pill fit above the hints.
+const cacheRowH = 48
 
 // storagePage is the Storage page: the card, what the
 // caches take, and Clear caches, with a dialog to confirm it.
@@ -56,7 +56,7 @@ func (p *storagePage) handle(s *Screen, ev input.Event, now time.Time) bool {
 	}
 	if ev.Kind == input.Press && ev.Button == input.A {
 		p.dialog = newConfirm(widgets.Dialog{Icon: "trash", IconColor: theme.GoldSoft, Title: "Clear caches?",
-			Body:  "Covers and lyrics are fetched again when needed. Your music, downloads and the downloader stay.",
+			Body:  "Covers, lyrics and fonts are fetched again when needed. Your music, downloads and the downloader stay.",
 			Pills: []widgets.DialogPill{{Label: "Clear"}, {Label: "Cancel"}}}, now)
 		return true
 	}
@@ -84,7 +84,7 @@ func (p *storagePage) refresh(s *Screen) {
 	}
 	if sz, ok := p.space.Sizes(); ok && (sz != p.sizes || p.shown[0] == "Measuring…") {
 		p.sizes = sz
-		for i, n := range [...]int64{sz.Art, sz.Lyrics, sz.Parts, sz.Downloader} {
+		for i, n := range [...]int64{sz.Art, sz.Lyrics, sz.Fonts, sz.Parts, sz.Downloader} {
 			p.shown[i] = screens.Size(n)
 		}
 	}

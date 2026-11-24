@@ -20,6 +20,18 @@ func noticeText(n player.Notice) string {
 		return "Skipped a Spotify song while offline"
 	case player.SignedOut:
 		return "Spotify session expired"
+	case player.NeedsPremium:
+		return "Spotify songs need Spotify Premium"
+	case player.Refused:
+		return "Spotify won’t stream to this account"
+	case player.SwitchedOff:
+		return n.Off + " is off"
+	case player.CouldNotPlay:
+		return "Couldn’t play " + n.Name
+	case player.Lost:
+		return "Lost " + n.Name
+	case player.SleepTimerOff:
+		return "Sleep timer off"
 	}
 	return "Skipped a Spotify song that couldn’t play"
 }

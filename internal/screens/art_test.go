@@ -64,3 +64,25 @@ func TestArtistArtIsTheirNewestAlbum(t *testing.T) {
 		t.Fatalf("artist art %+v", s)
 	}
 }
+
+// A station's art is its logo, over a placeholder that always shows its
+// initial.
+func TestStationArt(t *testing.T) {
+	logo := "https://logos.radio.test/city.png"
+	s := StationArt("Radio City", logo)
+	if s.Cover != (media.Cover{URL: logo}) || s.Variant != 2 || s.Glyph != "R" || s.Hue != widgets.SpecFor("Radio City").Hue {
+		t.Fatalf("station art %+v", s)
+	}
+	if s := StationArt("Radio City", ""); s.Cover != (media.Cover{}) || s.Variant != 2 {
+		t.Fatalf("without a logo: %+v", s)
+	}
+}
+
+// A queued station shows its logo, on Now Playing, the Queue and Lyrics.
+func TestQueuedStationsArtIsTheirLogo(t *testing.T) {
+	tr := player.Track{Title: "Radio City", Artist: "India", Cover: "https://logos.radio.test/city.png",
+		StationID: "96062a7b-0601-11e8-ae97-52543be04c81", Stream: "http://stream.radio.test/city"}
+	if s := TrackArt(tr); s != StationArt("Radio City", tr.Cover) {
+		t.Fatalf("station art %+v", s)
+	}
+}

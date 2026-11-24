@@ -1,11 +1,14 @@
 package ytmusic
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,6 +22,7 @@ type fakeYT struct {
 	asked []string
 	gate  chan struct{}
 	err   error
+	empty bool // searches find nothing
 }
 
 func (f *fakeYT) note(ctx context.Context, what string) error {
@@ -37,7 +41,7 @@ func (f *fakeYT) note(ctx context.Context, what string) error {
 }
 
 func (f *fakeYT) Search(ctx context.Context, query string, fl Filter) ([]Item, error) {
-	if err := f.note(ctx, "search "+query+" "+FilterNames[fl]); err != nil {
+	if err := f.note(ctx, "search "+query+" "+FilterNames[fl]); err != nil || f.empty {
 		return nil, err
 	}
 	return []Item{{Kind: SongItem, ID: query, Title: query}}, nil
@@ -341,6 +345,30 @@ func TestAFallbackThatFailsLeavesSearchChanged(t *testing.T) {
 		Fallback: func(context.Context, string) ([]Item, error) { return nil, errors.New("yt-dlp isn't installed") }})
 	defer s.Close()
 	eventually(t, "an answer", func() bool { _, st := s.Search("night drive", All); return st == Changed })
+}
+
+// A search that finds nothing says so in the log, and whether yt-dlp answered
+// it: "No results" on a device then tells what was asked and who answered.
+func TestASearchThatFindsNothingIsLogged(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		client   *fakeYT
+		fallback bool
+	}{
+		{"youtube music", &fakeYT{empty: true}, false},
+		{"yt-dlp", &fakeYT{err: fmt.Errorf("%w: no tabs", ErrChanged)}, true},
+	} {
+		var log bytes.Buffer
+		s := NewSearcher(Options{Client: c.client, Pause: time.Millisecond, Log: slog.New(slog.NewTextHandler(&log, nil)),
+			Fallback: func(context.Context, string) ([]Item, error) { return nil, nil }})
+		t.Cleanup(s.Close)
+		eventually(t, c.name+" to answer", func() bool { _, st := s.Search("hello", All); return st == Done })
+		s.Close() // done writing to log
+		want := "fallback=" + strconv.FormatBool(c.fallback)
+		if l := log.String(); !strings.Contains(l, "found nothing") || !strings.Contains(l, "q=hello") || !strings.Contains(l, want) {
+			t.Errorf("%s: the log says %q", c.name, l)
+		}
+	}
 }
 
 func TestCloseCancelsWhatIsSent(t *testing.T) {

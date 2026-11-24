@@ -7,6 +7,81 @@ All notable changes to Boombrick. Versions match the release tags.
 ### Added
 
 - The status bar shows a bolt before the battery's percentage while the console is charging, and when it is full on the charger.
+## [v0.6.0]
+
+### Added
+
+- **Radio:** a new Radio tab plays internet radio from Radio Browser, a free directory of stations that needs no account.
+  - Browse the most played stations, or stations by country or by genre, or search for a station by name.
+  - Press Y on a station to save it. Saved stations come first on the tab and get a row of their own on Home.
+  - A station plays with the list it came from, so L1 and R1 step to the next station.
+  - Now Playing shows the station's logo and the song it is playing, with a Live mark where the progress bar would be.
+  - MP3 and AAC stations play, AAC+ included. If a stream drops, Boombrick connects again by itself, and gives up after 2 minutes.
+  - Pause stops the stream, and Play picks it up live.
+  - Stations play on with **Play in background** too.
+- **Radio switch:** Settings' Integrations page has a switch for Radio. With it off, the Radio tab and Home's Radio row are hidden.
+
+### Changed
+
+- While a station plays, the sleep timer offers only its timed choices, as a station has no end.
+- The Spotify badge on Now Playing dims while you're offline.
+
+## [v0.5.3]
+
+### Added
+
+- **Integrations:** Settings has a new Integrations page where you can switch Spotify and YouTube off if you don't use them. An integration switched off takes its tabs and settings with it and does no work in the background: Spotify's helper isn't started, and nothing is searched or downloaded from YouTube. Your sign-in, playlists, download queue and imports are kept, and downloaded songs stay in the Library, so switching it back on brings everything back at once.
+- **Import one song:** on a Spotify playlist's page, X on a song imports just that song to your downloads. X on the playlist's buttons still imports the whole playlist.
+
+### Changed
+
+- **Tab row:** L1 and R1 sit at the edges of the screen. When the tabs don't all fit, their names scroll between L1 and R1 to keep the tab you're on in view, fading out at the edges. R1 on the last tab goes to the first, and L1 on the first to the last.
+- Songs from an integration that is switched off are skipped in the queue, with "Spotify is off" or "YouTube is off". The song playing and the downloads under way when you switch it off finish first. Spotify songs you've imported still play from their downloads when **Prefer downloaded copies** is on.
+
+### Fixed
+
+- **Spotify accounts Spotify won't stream to:** Spotify gives some accounts, Premium ones too, no songs at all. Their songs waited with "Spotify needs a break" and then stopped. They are now skipped with "Spotify won't stream to this account", and the rest of the queue plays.
+- The R1 button at the right of the tab row was cut off.
+
+## [v0.5.2]
+
+### Fixed
+
+- **Bluetooth headphones:** with some headphones, such as AirPods and UGREEN's, nothing played, and quitting froze the Brick until it was restarted. Boombrick now makes every call to the sound card from one thread, which fixed it with AirPods.
+- When the sound card stops taking audio for 3 seconds, playback pauses instead of hanging. Press play to try again.
+- Quit and **Play in background** no longer wait on a sound card that has stopped answering. Quit closes Boombrick within 2 seconds, and Play in background says "Couldn't play in the background" and Boombrick stays open.
+- The log names the sound device Boombrick opens, and any call to the sound card that takes more than a second, to help track down sound problems.
+
+## [v0.5.1]
+
+### Fixed
+
+- **YouTube Music in Europe, the UK and Switzerland:** search could show "No results" for everything. Boombrick now answers YouTube's question about cookies with each request, as yt-dlp and other YouTube Music apps do.
+- When YouTube Music answers a search in a form Boombrick can't read, Boombrick searches with yt-dlp instead, or says YouTube Music isn't answering as expected, rather than showing "No results".
+- **Spotify on a free account:** Spotify streams to Premium accounts only, so a free account's songs waited with "Spotify needs a break" and then played nothing. They are now skipped with "Spotify songs need Spotify Premium", and the rest of the queue plays.
+
+## [v0.5.0]
+
+### Added
+
+- **Every script:** titles, artists, albums and lyrics in Japanese, Chinese, Korean, Arabic, Hebrew, Thai, Hindi and the other main Indian scripts are drawn in their own letters instead of boxes, joined and right to left where the script is, and so are emoji, in one colour. Boombrick downloads a script's font the first time it shows up, in the Library after a scan, in lyrics or on screen: about 1 to 2 MB for Chinese, Japanese or Korean, about half a megabyte for emoji, and under 100 KB for each of the others. Fonts stay on the SD card; until the Brick is online that first time, the letters show as boxes. Settings' Storage page shows the fonts' size, and Clear caches removes them.
+- **Rewind and fast-forward:** on Now Playing and Lyrics, L2 and R2 jump back or ahead 10 seconds. Hold one and the time runs on, faster the longer you hold it, while the song keeps playing; let go and it carries on from there.
+
+### Changed
+
+- The first launch after updating reads every song's tags again, to find the discs of albums on more than one. On a big card this takes about as long as the first scan, and the Library works meanwhile.
+- Chinese and Japanese lyrics wrap between characters, and a title too long for its place is shortened between whole characters, never inside an emoji or a letter with its accents.
+
+### Fixed
+
+- Albums on more than one disc stay one album, in disc order. Disc folders named like `Disc 1 - Title`, `CD2 (Bonus)`, `Disc 2 of 2` or `[Disc 1]` count as discs, and so does an album name that ends with its disc, as `Album (Disc 1)`, `Album [CD2]` or `アルバム（Disc 1）`, whether it is the folder's or the album tag's. The disc these give wins over a disc tag, so discs that were each tagged as disc 1 of 1 no longer mix their tracks. Disc and track numbers tagged with a space before them, or as `DISC`, are read too.
+- The Downloads tab's storage card no longer shows a wrong, even negative, size for your music while the first scan after an update reads every song again.
+
+## [v0.4.1]
+
+### Fixed
+
+- **Play in background** works with a USB-C DAC. Boombrick now lets go of the sound card before it hands the music over, so the background player can open the DAC instead of failing with "Couldn't play in the background".
 
 ## [v0.4.0]
 

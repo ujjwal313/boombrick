@@ -12,6 +12,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
+	"github.com/ujjwal313/boombrick/internal/radio"
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/spotify"
 	"github.com/ujjwal313/boombrick/internal/theme"
@@ -498,6 +499,27 @@ func TestContinueRow(t *testing.T) {
 	}
 }
 
+// An album renamed since it was played, as when a rescan takes "(Disc 1)" off
+// its name, is found by its file, and shows once however many names it was
+// played under: as most recently played.
+func TestContinueRowFindsARenamedAlbum(t *testing.T) {
+	ix := library.NewIndex([]library.Album{
+		{Artist: "Odalys", Title: "Copper Season", Tracks: []library.Track{{Path: "/a/1"}, {Path: "/a/2"}}},
+	})
+	progress := []resume.Progress{
+		{Artist: "Odalys", Album: "Copper Season (Disc 1)", Path: "/a/2", Frame: 4800, Fraction: 0.7},
+		{Artist: "Odalys", Album: "Copper Season", Path: "/a/1", Fraction: 0.2},
+	}
+	var gotTrack int
+	row, ok := ContinueRow(progress, ix, func(a *library.Album, track int, frame int64) { gotTrack = track }, nil)
+	if !ok || len(row.Items) != 1 || row.Items[0].Progress != 0.7 || row.Items[0].Title != "Copper Season" {
+		t.Fatalf("row = %+v", row)
+	}
+	if row.Items[0].Play(); gotTrack != 1 {
+		t.Fatalf("Play resumed track %d, want 1", gotTrack)
+	}
+}
+
 func TestYQueuesTheFocusedItem(t *testing.T) {
 	queued := 0
 	rows := fixture.Home()
@@ -578,4 +600,51 @@ func TestSpotifyRow(t *testing.T) {
 	if strings.Join(imported, ",") != spotify.LikedURI {
 		t.Fatalf("X imported %v", imported)
 	}
+}
+
+func TestRadioRow(t *testing.T) {
+	if _, ok := RadioRow(nil, nil); ok {
+		t.Fatal("a row with no stations kept")
+	}
+	saved := []radio.Station{
+		{ID: "a", Name: "Vividh Bharati", URL: "http://x/a", Country: "India"},
+		{ID: "b", Name: "Radio Swiss Jazz", URL: "http://x/b", Country: "Switzerland"},
+	}
+	var played []int
+	row, ok := RadioRow(saved, func(i int) { played = append(played, i) })
+	if !ok || row.Title != "Radio" || row.Meta != "2 stations" || !row.Cards || len(row.Items) != 2 {
+		t.Fatalf("row %+v", row)
+	}
+	if it := row.Items[1]; it.Title != "Radio Swiss Jazz" || it.Subtitle != "Switzerland" || it.Import != nil || it.Queue != nil {
+		t.Fatalf("second card %+v", it)
+	}
+	for _, it := range row.Items {
+		it.Play()
+	}
+	if len(played) != 2 || played[0] != 0 || played[1] != 1 {
+		t.Fatalf("played %v", played)
+	}
+	if one, _ := RadioRow(saved[:1], func(int) {}); one.Meta != "1 station" {
+		t.Fatalf("meta %q", one.Meta)
+	}
+	h := New([]fixture.Row{row})
+	got := h.hints()
+	if len(got) != 2 || got[0].Key != "A" || got[0].Label != "Play" || got[1].Key != "L1/R1" || got[1].Label != "Tabs" {
+		t.Fatalf("hints %v", got)
+	}
+}
+
+func TestRadioRowGolden(t *testing.T) {
+	saved := []radio.Station{
+		{ID: "a", Name: "Vividh Bharati", URL: "http://x/a", Country: "India"},
+		{ID: "b", Name: "Radio Swiss Jazz", URL: "http://x/b", Country: "Switzerland"},
+		{ID: "c", Name: "NTS 1", URL: "http://x/c", Country: "United Kingdom"},
+	}
+	row, _ := RadioRow(saved, func(int) {})
+	rows := fixture.Home()
+	rows = append([]fixture.Row{rows[0]}, row)
+	h := New(rows)
+	render(t, h, t0)
+	h.Handle(press(input.Down), t0)
+	uitest.Golden(t, "home-radio-row", render(t, h, t0.Add(anim.Focus)))
 }

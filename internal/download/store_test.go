@@ -58,4 +58,13 @@ func TestRowsKeep(t *testing.T) {
 	if n, err := musicBytes(db); err != nil || n != 3500 {
 		t.Fatalf("music bytes %d, %v", n, err)
 	}
+	// A file marked to be read again, -1 bytes until the scan gets to it,
+	// adds nothing.
+	if _, err := db.Exec(`INSERT INTO tracks (path, size, mtime, artist, album, title, number, added) VALUES
+		('/m/3.opus', -1, 0, '', '', '', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := musicBytes(db); err != nil || n != 3500 {
+		t.Fatalf("music bytes with a file to read again %d, %v", n, err)
+	}
 }

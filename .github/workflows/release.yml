@@ -39,13 +39,17 @@ jobs:
         working-directory: dist
         run: sha256sum Boombrick.pak.zip Boombrick-CrossMix.zip Boombrick-Knulli.zip Boombrick-PakStore.zip > SHA256SUMS
       # The notes are the tag's section of CHANGELOG.md, from its "## [v…]"
-      # heading to the next; GitHub's own when there is none.
+      # heading to the next, with the coffee link after it; GitHub's own when
+      # there is none.
       - name: Release notes
         run: |
           awk -v head="## [$GITHUB_REF_NAME]" '
             index($0, "## [") == 1 { if (on) exit; on = ($0 == head); next }
             on
           ' CHANGELOG.md > dist/NOTES.md
+          if grep -q '[^[:space:]]' dist/NOTES.md; then
+            printf "\nBoombrick is free. If you'd like to help keep it going, you can [buy me a coffee](https://buymeacoffee.com/ujjwal_).\n" >> dist/NOTES.md
+          fi
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}

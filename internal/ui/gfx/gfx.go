@@ -21,6 +21,7 @@ type Canvas struct {
 	// What a draw hands SDL. A rectangle passed to C escapes to the heap, so
 	// these are reused rather than made for every draw.
 	dst  sdl.FRect
+	src  sdl.Rect
 	clip sdl.Rect
 }
 
@@ -73,6 +74,16 @@ func (c *Canvas) Draw(t *Texture, dst Rect, col color.NRGBA) {
 	t.t.SetAlphaMod(col.A)
 	c.dst = sdl.FRect{X: dst.X, Y: dst.Y, W: dst.W, H: dst.H}
 	c.r.CopyF(t.t, nil, &c.dst)
+}
+
+// DrawPart copies the part src of the texture, in its own pixels, into dst,
+// multiplied by col.
+func (c *Canvas) DrawPart(t *Texture, src image.Rectangle, dst Rect, col color.NRGBA) {
+	t.t.SetColorMod(col.R, col.G, col.B)
+	t.t.SetAlphaMod(col.A)
+	c.src = sdl.Rect{X: int32(src.Min.X), Y: int32(src.Min.Y), W: int32(src.Dx()), H: int32(src.Dy())}
+	c.dst = sdl.FRect{X: dst.X, Y: dst.Y, W: dst.W, H: dst.H}
+	c.r.CopyF(t.t, &c.src, &c.dst)
 }
 
 func nearInt(v float32, n int) bool { return math.Abs(float64(v)-float64(n)) < 0.01 }
