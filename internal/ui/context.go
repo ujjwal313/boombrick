@@ -28,6 +28,7 @@ type Status struct {
 	Online     bool
 	Bluetooth  string
 	Battery    int
+	Charging   bool // the battery is on the charger
 }
 
 // TabRow is the state of the tab row, which every screen draws alike: the

@@ -37,6 +37,26 @@ func TestReadStatus(t *testing.T) {
 			"net/lo/operstate":                      "unknown",
 			"net/wlan0/operstate":                   "up",
 		}, Status{Battery: 57, Online: true}},
+		{"charging", map[string]string{
+			"power_supply/axp2202-battery/type":     "Battery",
+			"power_supply/axp2202-battery/capacity": "77",
+			"power_supply/axp2202-battery/status":   "Charging",
+		}, Status{Battery: 77, Charging: true}},
+		{"full on the charger", map[string]string{
+			"power_supply/axp2202-battery/type":     "Battery",
+			"power_supply/axp2202-battery/capacity": "100",
+			"power_supply/axp2202-battery/status":   "Full",
+		}, Status{Battery: 100, Charging: true}},
+		{"on the battery", map[string]string{
+			"power_supply/axp2202-battery/type":     "Battery",
+			"power_supply/axp2202-battery/capacity": "40",
+			"power_supply/axp2202-battery/status":   "Discharging",
+		}, Status{Battery: 40}},
+		{"not charging", map[string]string{
+			"power_supply/axp2202-battery/type":     "Battery",
+			"power_supply/axp2202-battery/capacity": "80",
+			"power_supply/axp2202-battery/status":   "Not charging",
+		}, Status{Battery: 80}},
 		{"a supply before the battery is skipped", map[string]string{
 			"power_supply/AC/type":       "Mains",
 			"power_supply/AC/capacity":   "100",

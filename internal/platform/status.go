@@ -10,13 +10,15 @@ import (
 // Status is the device state the status bar shows.
 type Status struct {
 	Battery   int    // charge in percent, or -1 when there is no battery
+	Charging  bool   // the battery is being charged, or is full on the charger
 	Online    bool   // a network interface other than loopback is up
 	Bluetooth string // the connected audio device, or ""
 }
 
 // ReadStatus reads the battery and the network from the sysfs tree at sys,
 // normally "/sys". The battery is the first power supply of type Battery; on
-// the Brick that is axp2202-battery.
+// the Brick that is axp2202-battery. It is charging when its status says
+// Charging, or Full, which it reads on the charger.
 func ReadStatus(sys string) Status {
 	st := Status{Battery: -1}
 	supplies := filepath.Join(sys, "class", "power_supply")
@@ -28,6 +30,10 @@ func ReadStatus(sys string) Status {
 		}
 		if n, err := strconv.Atoi(readLine(dir, "capacity")); err == nil {
 			st.Battery = min(max(n, 0), 100)
+		}
+		switch readLine(dir, "status") {
+		case "Charging", "Full":
+			st.Charging = true
 		}
 		break
 	}

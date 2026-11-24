@@ -2,6 +2,11 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [Unreleased]
+
+### Added
+
+- The status bar shows a bolt before the battery's percentage while the console is charging, and when it is full on the charger.
 ## [v0.6.0]
 
 ### Added
